@@ -1,6 +1,7 @@
-import { ReactNode } from "react";
+import { ReactNode, useState } from "react";
 import { useNavigate, useLocation, Link } from "react-router-dom";
 import { useAuth } from "@/components/auth";
+import { ThemeToggle } from "@/components/theme";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import {
@@ -15,14 +16,11 @@ import { Badge } from "@/components/ui/badge";
 import {
   Server,
   LayoutDashboard,
-  Monitor,
   Users,
-  Settings,
   LogOut,
   Menu,
   X,
 } from "lucide-react";
-import { useState } from "react";
 import { cn } from "@/lib/utils";
 
 interface DashboardLayoutProps {
@@ -76,6 +74,7 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
           >
             {sidebarOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
           </Button>
+          <ThemeToggle />
           <Server className="h-6 w-6 text-primary" />
           <span className="font-semibold">Proxmox VNC Nexus</span>
         </div>
@@ -151,6 +150,12 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
               </Link>
             ))}
           </nav>
+
+          {/* Theme toggle */}
+          <div className="px-4 py-2 border-t flex items-center justify-between">
+            <span className="text-sm text-muted-foreground">Theme</span>
+            <ThemeToggle />
+          </div>
 
           {/* User menu */}
           <div className="p-4 border-t">
