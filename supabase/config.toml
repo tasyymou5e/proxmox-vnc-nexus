@@ -1,1 +1,13 @@
 project_id = "lbfabewnshfjdjfosqxl"
+
+[functions.proxmox-api]
+verify_jwt = false
+
+[functions.list-vms]
+verify_jwt = false
+
+[functions.vm-console]
+verify_jwt = false
+
+[functions.vm-actions]
+verify_jwt = false
