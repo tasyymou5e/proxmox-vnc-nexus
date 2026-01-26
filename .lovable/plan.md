@@ -1,295 +1,326 @@
 
-## Multi-Proxmox Server Management Feature
+## Multi-Feature Enhancement: Health Checks, CSV Import, and Server Filtering
 
 ### Overview
-Add the ability for users to configure and manage up to 50 Proxmox VE servers through the Settings section. Each user can add their own Proxmox server connections, which are securely stored in the database with encrypted API tokens.
+This plan implements three interconnected features for managing multiple Proxmox servers:
+
+1. **Connection Status Monitoring with Automatic Health Checks** - Periodic background health checks for all configured servers
+2. **Bulk Import via CSV Upload** - Import multiple servers from a CSV file
+3. **Server Filtering on Dashboard** - Filter VMs by specific Proxmox server
 
 ---
 
-### Architecture Decision
+## Feature 1: Connection Status Monitoring with Automatic Health Checks
 
-**User-scoped vs Global Servers:**
-- Each user can add their own Proxmox servers (personal connection management)
-- Admins can optionally see/manage all servers for administrative purposes
-- API tokens are encrypted at rest using Supabase's pgcrypto extension
+### 1.1 Database Schema Update
 
----
-
-### Part 1: Database Schema
-
-**New Table: `proxmox_servers`**
+Add a `connection_status` column to track health check results:
 
 ```sql
--- Enable pgcrypto for encryption
-CREATE EXTENSION IF NOT EXISTS pgcrypto;
+-- Add health check tracking columns
+ALTER TABLE public.proxmox_servers 
+ADD COLUMN IF NOT EXISTS connection_status text DEFAULT 'unknown',
+ADD COLUMN IF NOT EXISTS last_health_check_at timestamptz,
+ADD COLUMN IF NOT EXISTS health_check_error text;
 
--- Create the proxmox_servers table
-CREATE TABLE public.proxmox_servers (
-    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    user_id uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
-    name text NOT NULL,
-    host text NOT NULL,
-    port integer NOT NULL DEFAULT 8006,
-    api_token_encrypted text NOT NULL,
-    verify_ssl boolean DEFAULT true,
-    is_active boolean DEFAULT true,
-    last_connected_at timestamptz,
-    created_at timestamptz DEFAULT now(),
-    updated_at timestamptz DEFAULT now(),
-    CONSTRAINT proxmox_servers_port_check CHECK (port > 0 AND port < 65536),
-    CONSTRAINT proxmox_servers_user_limit CHECK (
-        (SELECT COUNT(*) FROM public.proxmox_servers ps WHERE ps.user_id = user_id) <= 50
-    )
-);
-
--- Create unique constraint on user_id + host + port
-CREATE UNIQUE INDEX proxmox_servers_user_host_port_idx 
-ON public.proxmox_servers(user_id, host, port);
-
--- Enable RLS
-ALTER TABLE public.proxmox_servers ENABLE ROW LEVEL SECURITY;
-
--- RLS Policies
-CREATE POLICY "Users can view their own servers"
-ON public.proxmox_servers FOR SELECT
-USING (auth.uid() = user_id);
-
-CREATE POLICY "Users can insert their own servers"
-ON public.proxmox_servers FOR INSERT
-WITH CHECK (auth.uid() = user_id);
-
-CREATE POLICY "Users can update their own servers"
-ON public.proxmox_servers FOR UPDATE
-USING (auth.uid() = user_id);
-
-CREATE POLICY "Users can delete their own servers"
-ON public.proxmox_servers FOR DELETE
-USING (auth.uid() = user_id);
-
-CREATE POLICY "Admins can view all servers"
-ON public.proxmox_servers FOR SELECT
-USING (has_role(auth.uid(), 'admin'));
-
--- Updated_at trigger
-CREATE TRIGGER update_proxmox_servers_updated_at
-    BEFORE UPDATE ON public.proxmox_servers
-    FOR EACH ROW
-    EXECUTE FUNCTION update_updated_at_column();
+-- connection_status values: 'online', 'offline', 'unknown', 'checking'
 ```
 
----
+### 1.2 Edge Function Update
 
-### Part 2: Edge Function for Token Encryption/Decryption
+**File: `supabase/functions/proxmox-servers/index.ts`**
 
-**New Edge Function: `proxmox-servers`**
-
-Handles CRUD operations with secure token encryption:
+Add a new `health-check-all` action:
 
 ```typescript
-// supabase/functions/proxmox-servers/index.ts
-
-// POST - Create server (encrypts token)
-// GET - List user's servers (tokens masked)
-// PUT - Update server
-// DELETE - Remove server
-// POST /test - Test connection to a Proxmox server
+// POST with action: "health-check-all"
+// Tests connection to all active servers for the user
+// Updates connection_status, last_health_check_at, health_check_error in database
+// Returns array of { serverId, status, error? }
 ```
 
-**Encryption approach:**
-- Use a server-side encryption key stored as a Supabase secret (`PROXMOX_ENCRYPTION_KEY`)
-- Tokens encrypted before storage, decrypted only when making API calls
-- Tokens never exposed to frontend after initial submission
+### 1.3 Frontend Hook Update
 
----
+**File: `src/hooks/useProxmoxServers.ts`**
 
-### Part 3: Update Existing Edge Functions
+Add health check functionality:
 
-Modify `list-vms`, `vm-console`, and `vm-actions` to:
+```typescript
+const runHealthChecks = useCallback(async (): Promise<HealthCheckResult[]>
+// Calls the edge function to check all servers
+// Updates local state with new connection statuses
 
-1. Accept an optional `serverId` parameter
-2. Look up server credentials from `proxmox_servers` table
-3. Decrypt the API token for the request
-4. Fall back to environment variables if no serverId (for backward compatibility)
-
-**Updated flow:**
-
-```text
-Frontend Request (with serverId)
-       ↓
-Edge Function validates user owns server
-       ↓
-Decrypt API token from database
-       ↓
-Make Proxmox API call
-       ↓
-Return results
+// Auto-refresh every 2 minutes when page is focused
+useEffect(() => {
+  const interval = setInterval(runHealthChecks, 120000);
+  return () => clearInterval(interval);
+}, []);
 ```
 
----
-
-### Part 4: New UI Components
+### 1.4 UI Updates
 
 **File: `src/pages/ProxmoxServers.tsx`**
 
-New page accessible from Settings in the sidebar:
+Update server cards to show live status:
 
 ```
-+--------------------------------------------------+
-|  Proxmox Servers                    [+ Add Server]|
-+--------------------------------------------------+
-|  Search servers...                               |
-+--------------------------------------------------+
-|  +-------------------------------------------+   |
-|  | Server Name: Production Cluster           |   |
-|  | Host: pve1.company.com:8006              |   |
-|  | Status: ● Connected                       |   |
-|  | Last connected: Jan 26, 2026              |   |
-|  | [Test] [Edit] [Delete]                    |   |
-|  +-------------------------------------------+   |
-|  | Server Name: Development                  |   |
-|  | Host: 192.168.1.100:8006                 |   |
-|  | Status: ○ Not tested                      |   |
-|  | [Test] [Edit] [Delete]                    |   |
-|  +-------------------------------------------+   |
-|                                                  |
-|  Showing 2 of 50 server slots used              |
-+--------------------------------------------------+
++-------------------------------------------+
+| Server Name: Production Cluster           |
+| Host: pve1.company.com:8006              |
+| Status: ● Online (checked 2m ago)         |  <- NEW status indicator
+|         └─ 3 nodes available              |
+| [Refresh All] [Test] [Edit] [Delete]      |  <- NEW "Refresh All" button
++-------------------------------------------+
 ```
 
-**Add/Edit Server Dialog:**
-
-```
-+----------------------------------------+
-|  Add Proxmox Server                    |
-+----------------------------------------+
-|  Server Name *                         |
-|  [Production Cluster              ]    |
-|                                        |
-|  Host/IP Address *                     |
-|  [pve1.company.com               ]     |
-|                                        |
-|  Port *                                |
-|  [8006                           ]     |
-|                                        |
-|  API Token *                           |
-|  [user@realm!token=xxxx...       ]     |
-|  Format: USER@REALM!TOKENID=UUID       |
-|                                        |
-|  [ ] Verify SSL Certificate            |
-|                                        |
-|  [Cancel]              [Test & Save]   |
-+----------------------------------------+
-```
+Status indicators:
+- 🟢 Online - Connection successful
+- 🔴 Offline - Connection failed (show error tooltip)
+- ⚪ Unknown - Not yet checked
+- 🔵 Checking - Health check in progress
 
 ---
 
-### Part 5: Dashboard Integration
+## Feature 2: Bulk Import via CSV Upload
 
-**Updated VM fetching logic:**
+### 2.1 CSV Format Specification
 
-1. If user has configured servers, aggregate VMs from all active servers
-2. Display server name badge on each VM card
-3. Add server filter dropdown in Dashboard
+```csv
+name,host,port,api_token,verify_ssl
+Production Cluster,pve1.company.com,8006,user@realm!tokenid=uuid,true
+Development,192.168.1.100,8006,dev@pam!token=uuid,false
+```
 
-**Updated VM type:**
+Required columns: `name`, `host`, `api_token`
+Optional columns: `port` (default: 8006), `verify_ssl` (default: true)
+
+### 2.2 Edge Function Update
+
+**File: `supabase/functions/proxmox-servers/index.ts`**
+
+Add bulk import action:
 
 ```typescript
-interface VM {
-  // ...existing fields
-  serverId?: string;      // New - which server this VM belongs to
-  serverName?: string;    // New - display name of the server
-}
+// POST with action: "bulk-import"
+// body: { servers: ServerInput[] }
+// Validates each server, encrypts tokens, inserts in batch
+// Returns { success: number, failed: { index, name, error }[] }
 ```
 
----
+### 2.3 Frontend Components
 
-### Part 6: Navigation Updates
+**File: `src/components/servers/CSVImportDialog.tsx`** (New)
 
-**File: `src/components/layout/DashboardLayout.tsx`**
+```
++------------------------------------------------+
+|  Import Proxmox Servers from CSV               |
++------------------------------------------------+
+|  Upload a CSV file with your server details.   |
+|                                                |
+|  [Choose File] servers.csv                     |
+|                                                |
+|  Preview:                                      |
+|  +------------------------------------------+ |
+|  | Name       | Host              | Port    | |
+|  |------------|-------------------|---------|  |
+|  | Prod       | pve1.company.com  | 8006    | |
+|  | Dev        | 192.168.1.100     | 8006    | |
+|  +------------------------------------------+ |
+|                                                |
+|  ℹ️ 2 servers will be imported                 |
+|                                                |
+|  [Download Template]  [Cancel]  [Import]       |
++------------------------------------------------+
+```
 
-Add "Proxmox Servers" link in the Settings section:
+**File: `src/hooks/useProxmoxServers.ts`**
+
+Add bulk import function:
+
+```typescript
+const bulkImportServers = useCallback(async (
+  servers: ProxmoxServerInput[]
+): Promise<{ success: number; failed: ImportError[] }>
+```
+
+### 2.4 UI Integration
+
+**File: `src/pages/ProxmoxServers.tsx`**
+
+Add import button next to Add Server:
 
 ```tsx
-const navItems = [
-  { label: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
-  { label: "Settings", href: "/profile", icon: Settings },
-  { label: "Servers", href: "/servers", icon: Server },  // New
-  ...(isAdmin ? [{ label: "Admin", href: "/admin", icon: Users }] : []),
-];
+<Button variant="outline" onClick={() => setImportDialogOpen(true)}>
+  <Upload className="h-4 w-4 mr-2" />
+  Import CSV
+</Button>
 ```
 
 ---
 
-### Part 7: Types Update
+## Feature 3: Server Filtering on Dashboard
+
+### 3.1 Type Updates
 
 **File: `src/lib/types.ts`**
 
-```typescript
-export interface ProxmoxServer {
-  id: string;
-  user_id: string;
-  name: string;
-  host: string;
-  port: number;
-  verify_ssl: boolean;
-  is_active: boolean;
-  last_connected_at: string | null;
-  created_at: string;
-  updated_at: string;
-}
+Extend VM interface:
 
-export interface ProxmoxServerInput {
-  name: string;
-  host: string;
-  port: number;
-  api_token: string;  // Only used for create/update
-  verify_ssl?: boolean;
+```typescript
+export interface VM {
+  // ...existing fields
+  serverId?: string;      // ID of the Proxmox server
+  serverName?: string;    // Display name of the server
 }
+```
+
+### 3.2 API Updates
+
+**File: `src/lib/api.ts`**
+
+Update `listVMs` to support aggregating from multiple servers:
+
+```typescript
+export async function listVMs(serverId?: string): Promise<{ 
+  vms: VM[]; 
+  isAdmin: boolean;
+  servers: { id: string; name: string }[];  // Available servers
+}>
+```
+
+### 3.3 Edge Function Update
+
+**File: `supabase/functions/list-vms/index.ts`**
+
+Modify to aggregate VMs from all user servers when no serverId specified:
+
+```typescript
+// If no serverId:
+//   1. Get all active servers for user
+//   2. Fetch VMs from each server in parallel
+//   3. Combine results with serverId/serverName tags
+//   4. Return aggregated list + available servers for filter dropdown
+```
+
+### 3.4 Hook Updates
+
+**File: `src/hooks/useVMs.ts`**
+
+Add server filter support:
+
+```typescript
+export function useVMs(serverId?: string) {
+  return useQuery({
+    queryKey: ["vms", serverId],  // Cache per server
+    queryFn: () => listVMs(serverId),
+    // ...existing options
+  });
+}
+```
+
+### 3.5 Dashboard UI Updates
+
+**File: `src/pages/Dashboard.tsx`**
+
+Add server filter dropdown:
+
+```tsx
+// New state
+const [selectedServerId, setSelectedServerId] = useState<string>("all");
+const { data: serversData } = useProxmoxServers();
+
+// Filter dropdown (next to status filter)
+<Select value={selectedServerId} onValueChange={setSelectedServerId}>
+  <SelectTrigger className="w-[180px]">
+    <SelectValue placeholder="All Servers" />
+  </SelectTrigger>
+  <SelectContent>
+    <SelectItem value="all">All Servers</SelectItem>
+    {servers.map((s) => (
+      <SelectItem key={s.id} value={s.id}>
+        {s.name}
+      </SelectItem>
+    ))}
+  </SelectContent>
+</Select>
+```
+
+### 3.6 VM Card/Table Updates
+
+**File: `src/components/dashboard/VMCard.tsx`**
+
+Display server name on VM cards:
+
+```tsx
+// In card header, add server badge
+{vm.serverName && (
+  <Badge variant="secondary" className="text-xs">
+    {vm.serverName}
+  </Badge>
+)}
+```
+
+**File: `src/components/dashboard/VMTable.tsx`**
+
+Add Server column to table:
+
+```tsx
+<TableHead>Server</TableHead>
+// ...
+<TableCell>{vm.serverName || "-"}</TableCell>
 ```
 
 ---
 
-### Implementation Order
+## Implementation Order
 
 | Step | Task | Files |
 |------|------|-------|
-| 1 | Database migration for `proxmox_servers` table | SQL migration |
-| 2 | Add `PROXMOX_ENCRYPTION_KEY` secret | Supabase secrets |
-| 3 | Create `proxmox-servers` edge function | `supabase/functions/proxmox-servers/index.ts` |
-| 4 | Add types for ProxmoxServer | `src/lib/types.ts` |
-| 5 | Create ProxmoxServers page | `src/pages/ProxmoxServers.tsx` |
-| 6 | Add API functions | `src/lib/api.ts` |
-| 7 | Create hooks for server management | `src/hooks/useProxmoxServers.ts` |
-| 8 | Update navigation | `src/components/layout/DashboardLayout.tsx` |
-| 9 | Add route | `src/App.tsx` |
-| 10 | Update `list-vms` to use user servers | `supabase/functions/list-vms/index.ts` |
-| 11 | Update `vm-console` and `vm-actions` | Edge functions |
+| 1 | Database migration for health check columns | SQL migration |
+| 2 | Update edge function with health-check-all and bulk-import | `proxmox-servers/index.ts` |
+| 3 | Update types for VM server fields | `src/lib/types.ts` |
+| 4 | Update useProxmoxServers hook with health checks | `src/hooks/useProxmoxServers.ts` |
+| 5 | Create CSV import dialog component | `src/components/servers/CSVImportDialog.tsx` |
+| 6 | Update ProxmoxServers page with status + import | `src/pages/ProxmoxServers.tsx` |
+| 7 | Update list-vms edge function for aggregation | `supabase/functions/list-vms/index.ts` |
+| 8 | Update listVMs API function | `src/lib/api.ts` |
+| 9 | Update useVMs hook with server filter | `src/hooks/useVMs.ts` |
+| 10 | Update Dashboard with server filter | `src/pages/Dashboard.tsx` |
+| 11 | Update VMCard with server badge | `src/components/dashboard/VMCard.tsx` |
+| 12 | Update VMTable with server column | `src/components/dashboard/VMTable.tsx` |
 
 ---
 
-### Security Considerations
+## Summary of Changes
 
-1. **Token Encryption**: API tokens encrypted with AES-256 before storage
-2. **RLS Policies**: Users can only access their own server configurations
-3. **Input Validation**: Host, port, and token format validated both client and server side
-4. **Token Masking**: Tokens never returned to frontend after initial creation
-5. **Connection Testing**: Test endpoint validates credentials without storing them until confirmed
-
----
-
-### Validation Rules
-
-| Field | Validation |
-|-------|------------|
-| Name | Required, 1-100 characters |
-| Host | Required, valid hostname or IP |
-| Port | Required, 1-65535 (default 8006) |
-| API Token | Required, format: `USER@REALM!TOKENID=UUID` |
+| Component | Changes |
+|-----------|---------|
+| **Database** | Add `connection_status`, `last_health_check_at`, `health_check_error` columns |
+| **Edge Function: proxmox-servers** | Add `health-check-all` and `bulk-import` actions |
+| **Edge Function: list-vms** | Aggregate VMs from multiple servers |
+| **Frontend Types** | Add `serverId`, `serverName` to VM interface |
+| **useProxmoxServers** | Add `runHealthChecks`, `bulkImportServers`, auto-refresh |
+| **useVMs** | Add `serverId` parameter for filtering |
+| **ProxmoxServers page** | Add status indicators, "Refresh All" button, CSV import dialog |
+| **Dashboard** | Add server filter dropdown |
+| **VMCard** | Add server name badge |
+| **VMTable** | Add Server column |
 
 ---
 
-### Backward Compatibility
+## Security Considerations
 
-- Existing global `PROXMOX_*` environment variables continue to work
-- If a user has no configured servers, the system falls back to global config
-- Gradual migration path for users adopting personal server configs
+1. **CSV Import Validation**: Validate all imported data server-side before insertion
+2. **Token Format**: Verify API token format for each imported server
+3. **Rate Limiting**: Health checks limited to user's own servers via RLS
+4. **Batch Limits**: Maximum 50 servers per import (remaining capacity check)
+
+---
+
+## User Experience Enhancements
+
+1. **Auto-refresh**: Health checks run automatically every 2 minutes when page is visible
+2. **Visual Feedback**: Clear status indicators with timestamps
+3. **Error Details**: Tooltip/expandable section showing connection errors
+4. **Import Preview**: Show parsed CSV data before importing
+5. **Template Download**: Provide sample CSV template for users
