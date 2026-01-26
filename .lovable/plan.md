@@ -1,294 +1,539 @@
 
-
-# Tailscale Enhancement: Timeout Settings, Funnel Support & Connection Indicators
+# Tenant-Scoped Proxmox Management with Real-Time Stats
 
 ## Overview
 
-This plan implements three interconnected Tailscale-related features:
+This plan implements three major features to transform the application from user-scoped to tenant-scoped server management:
 
-1. **Connection Timeout Settings per Server** - Configurable timeout values for high-latency Tailscale connections
-2. **Tailscale Funnel Documentation & Support** - In-app documentation and UI hints for Funnel configuration
-3. **Tailscale Connection Indicator on VM Cards** - Visual indicator showing when VMs are accessed via Tailscale
+1. **Real-time VM Statistics on Tenant Dashboard** - Aggregate live data from all connected Proxmox servers
+2. **Tenant-Scoped Server Management** - Servers belong to tenants instead of individual users
+3. **Tenant User Management Page** - Assign users to tenants with admin/manager/viewer roles
 
 ---
 
-## Feature 1: Connection Timeout Settings per Server
+## Current State Analysis
 
-### 1.1 Database Schema Update
+### What Already Exists
+- Multi-tenancy schema: `tenants`, `user_tenant_assignments` tables with RLS
+- `proxmox_servers` table has `tenant_id` column (nullable)
+- Tenant edge function with user assignment actions
+- TenantDashboard with basic stats (currently showing placeholder data)
+- Helper functions: `has_tenant_role()`, `user_has_tenant_access()`
 
-Add a `connection_timeout` column to store custom timeout values:
+### What Needs to Change
+- Servers are currently scoped by `user_id` - need to scope by `tenant_id`
+- Dashboard stats are not real-time aggregated from Proxmox
+- No dedicated tenant user management page exists
+- Edge functions query by `user_id` instead of `tenant_id`
+
+---
+
+## Part 1: Database Schema Updates
+
+### 1.1 Make tenant_id Required for Servers
 
 ```sql
+-- First, update any orphaned servers (optional: assign to first admin's first tenant)
+-- Then add NOT NULL constraint
 ALTER TABLE public.proxmox_servers 
-ADD COLUMN IF NOT EXISTS connection_timeout integer DEFAULT 10000;
+ALTER COLUMN tenant_id SET NOT NULL;
 
--- connection_timeout is in milliseconds (default: 10 seconds)
--- Tailscale connections may need 30-60 seconds
+-- Add index for tenant queries
+CREATE INDEX IF NOT EXISTS idx_proxmox_servers_tenant ON public.proxmox_servers(tenant_id);
 ```
 
-### 1.2 Type Updates
+### 1.2 Update RLS Policies for Tenant-Scoped Access
 
-**File: `src/lib/types.ts`**
+**proxmox_servers Table - New Policies:**
 
-```typescript
-export interface ProxmoxServer {
-  // ...existing fields
-  connection_timeout: number; // milliseconds
-}
+| Policy | Command | Logic |
+|--------|---------|-------|
+| "Users can view servers in their tenants" | SELECT | User has any role in the server's tenant |
+| "Tenant admins/managers can insert servers" | INSERT | User has admin or manager role in the target tenant |
+| "Tenant admins/managers can update servers" | UPDATE | User has admin or manager role in the server's tenant |
+| "Tenant admins can delete servers" | DELETE | User has admin role in the server's tenant |
+| "System admins can manage all servers" | ALL | User has system admin role |
 
-export interface ProxmoxServerInput {
-  // ...existing fields
-  connection_timeout?: number;
-}
-```
+```sql
+-- Drop existing user-based policies
+DROP POLICY IF EXISTS "Users can view their own servers" ON public.proxmox_servers;
+DROP POLICY IF EXISTS "Users can insert their own servers" ON public.proxmox_servers;
+-- ... etc
 
-### 1.3 Edge Function Updates
+-- Create tenant-based policies
+CREATE POLICY "Users can view tenant servers"
+  ON public.proxmox_servers FOR SELECT
+  USING (
+    has_role(auth.uid(), 'admin') OR 
+    user_has_tenant_access(auth.uid(), tenant_id)
+  );
 
-Update all edge functions to use the server's `connection_timeout` value:
+CREATE POLICY "Tenant admins/managers can insert servers"
+  ON public.proxmox_servers FOR INSERT
+  WITH CHECK (
+    has_role(auth.uid(), 'admin') OR 
+    has_tenant_role(auth.uid(), tenant_id, ARRAY['admin', 'manager']::tenant_role[])
+  );
 
-**Files to update:**
-- `supabase/functions/_shared/proxmox-utils.ts` - Add `timeout` to `ProxmoxCredentials` interface
-- `supabase/functions/proxmox-servers/index.ts` - Use timeout in health checks and test connections
-- `supabase/functions/list-vms/index.ts` - Use timeout when fetching VMs
-- `supabase/functions/vm-actions/index.ts` - Use timeout for VM actions
-- `supabase/functions/vm-console/index.ts` - Use timeout for VNC ticket requests
+CREATE POLICY "Tenant admins/managers can update servers"
+  ON public.proxmox_servers FOR UPDATE
+  USING (
+    has_role(auth.uid(), 'admin') OR 
+    has_tenant_role(auth.uid(), tenant_id, ARRAY['admin', 'manager']::tenant_role[])
+  );
 
-**Shared utility update:**
-
-```typescript
-export interface ProxmoxCredentials {
-  host: string;
-  port: string;
-  token: string;
-  useTailscale: boolean;
-  timeout: number; // NEW
-}
-
-export async function getProxmoxCredentials(...): Promise<ProxmoxCredentials> {
-  // ...existing code
-  return {
-    host: effectiveHost,
-    port: effectivePort,
-    token: decryptToken(server.api_token_encrypted, encryptionKey),
-    useTailscale,
-    timeout: server.connection_timeout || 10000, // NEW
-  };
-}
-```
-
-**Usage in fetch calls:**
-
-```typescript
-const response = await fetch(url, {
-  headers: { "Authorization": `PVEAPIToken=${token}` },
-  signal: AbortSignal.timeout(credentials.timeout),
-});
-```
-
-### 1.4 Frontend UI Updates
-
-**File: `src/pages/ProxmoxServers.tsx`**
-
-Add timeout configuration to the server form:
-
-```
-+----------------------------------------+
-|  ─────── Connection Settings ───────   |
-|                                        |
-|  Connection Timeout                    |
-|  [──────────●───] 30 seconds          |  <- Slider input
-|                                        |
-|  Recommended: 10-15s for direct,      |
-|  30-60s for Tailscale connections      |
-+----------------------------------------+
-```
-
-The UI will include:
-- A slider component (range: 5-120 seconds)
-- Helper text explaining recommended values
-- Auto-suggestion when Tailscale is enabled
-
-**Form state addition:**
-
-```typescript
-const [formData, setFormData] = useState<ProxmoxServerInput & {
-  // ...existing fields
-  connection_timeout?: number; // in seconds for UI
-}>({
-  // ...existing defaults
-  connection_timeout: 10,
-});
-```
-
-### 1.5 CSV Import Update
-
-**File: `src/components/servers/CSVImportDialog.tsx`**
-
-Add `connection_timeout` column support:
-
-```csv
-name,host,port,api_token,verify_ssl,use_tailscale,tailscale_hostname,tailscale_port,connection_timeout
-Production,pve1.company.com,8006,user@realm!token=uuid,true,false,,,10
-Tailscale Server,192.168.1.100,8006,dev@pam!token=uuid,false,true,pve.tailnet.ts.net,8006,30
+CREATE POLICY "Tenant admins can delete servers"
+  ON public.proxmox_servers FOR DELETE
+  USING (
+    has_role(auth.uid(), 'admin') OR 
+    has_tenant_role(auth.uid(), tenant_id, ARRAY['admin']::tenant_role[])
+  );
 ```
 
 ---
 
-## Feature 2: Tailscale Funnel Support with Documentation
+## Part 2: Edge Function Updates
 
-### 2.1 New Documentation Component
+### 2.1 Update proxmox-servers Edge Function
 
-**File: `src/components/servers/TailscaleFunnelHelp.tsx`** (New)
+**File: `supabase/functions/proxmox-servers/index.ts`**
 
-A collapsible help section explaining Tailscale Funnel:
-
-```
-+------------------------------------------------+
-|  ℹ️ Tailscale Funnel Guide           [Expand]  |
-+------------------------------------------------+
-| Tailscale Funnel allows you to expose your     |
-| Proxmox server securely to the internet        |
-| without opening firewall ports.                |
-|                                                |
-| Setup Steps:                                   |
-| 1. Install Tailscale on your Proxmox server   |
-| 2. Enable Funnel: tailscale funnel 8006       |
-| 3. Note the public URL (e.g., pve.tail1234.ts.net) |
-| 4. Enter the Funnel URL as Tailscale hostname |
-|                                                |
-| Benefits:                                      |
-| • No port forwarding needed                   |
-| • End-to-end TLS encryption                   |
-| • Automatic HTTPS certificates                |
-|                                                |
-| [Read Tailscale Docs ↗]                       |
-+------------------------------------------------+
-```
-
-### 2.2 UI Integration
-
-**File: `src/pages/ProxmoxServers.tsx`**
-
-Add the help component below the Tailscale configuration section:
-
-```tsx
-{formData.use_tailscale && (
-  <TailscaleFunnelHelp />
-)}
-```
-
-### 2.3 Funnel Detection Badge
-
-Add a visual indicator when the Tailscale hostname appears to be a Funnel URL (contains `.ts.net`):
-
-```tsx
-{server.use_tailscale && server.tailscale_hostname?.includes('.ts.net') && (
-  <Badge variant="outline" className="text-xs text-purple-600 border-purple-600">
-    <ExternalLink className="h-3 w-3 mr-1" />
-    Funnel
-  </Badge>
-)}
-```
-
-### 2.4 Type Updates
-
-**File: `src/lib/types.ts`**
-
-No changes needed - existing fields support Funnel URLs.
-
----
-
-## Feature 3: Tailscale Connection Indicator on VM Cards
-
-### 3.1 Extend VM Interface
-
-**File: `src/lib/types.ts`**
+Change from user-scoped to tenant-scoped queries:
 
 ```typescript
-export interface VM {
+// ADD: Accept tenantId parameter
+interface ServerRequest {
+  tenantId?: string;
   // ...existing fields
-  useTailscale?: boolean;      // NEW: Is this VM accessed via Tailscale?
-  tailscaleHostname?: string;  // NEW: The Tailscale hostname used
+}
+
+// CHANGE: All queries filter by tenant_id instead of user_id
+// For GET (list servers):
+const { data: servers } = await supabase
+  .from("proxmox_servers")
+  .select("*")
+  .eq("tenant_id", tenantId)  // Changed from user_id
+  .order("created_at", { ascending: false });
+
+// For POST (create server):
+const insertData = {
+  tenant_id: tenantId,  // Changed from user_id
+  // ...other fields
+};
+
+// VALIDATE: Check user has tenant access before operations
+const hasAccess = await checkTenantAccess(supabase, userId, tenantId, ['admin', 'manager']);
+if (!hasAccess) {
+  return new Response(JSON.stringify({ error: "Access denied" }), { status: 403 });
 }
 ```
 
-### 3.2 Update List VMs Edge Function
+### 2.2 Update list-vms Edge Function
 
 **File: `supabase/functions/list-vms/index.ts`**
 
-Include Tailscale info when fetching VMs from servers:
+Add tenant filtering:
 
 ```typescript
-// When fetching from each server, include Tailscale status
-const { data: server } = await supabase
+interface ListVMsRequest {
+  tenantId?: string;
+  serverId?: string;
+}
+
+// Query servers by tenant
+const { data: servers } = await supabase
   .from("proxmox_servers")
-  .select("id, name, host, port, api_token_encrypted, use_tailscale, tailscale_hostname, tailscale_port")
-  ...
+  .select("*")
+  .eq("tenant_id", tenantId)
+  .eq("is_active", true);
+```
 
-const vms = (proxmoxData.data || []).map((vm: VM) => ({
-  ...vm,
-  serverId: server.id,
-  serverName: server.name,
-  useTailscale: server.use_tailscale && !!server.tailscale_hostname, // NEW
-  tailscaleHostname: server.use_tailscale ? server.tailscale_hostname : null, // NEW
+### 2.3 Create Real-Time Stats Edge Function
+
+**File: `supabase/functions/tenant-stats/index.ts`** (New)
+
+Aggregate live statistics from all tenant servers:
+
+```typescript
+// Actions: 'get-live-stats', 'get-resource-usage', 'get-node-status'
+
+// Fetch data from all active servers in parallel
+const servers = await getTenantServers(tenantId);
+const results = await Promise.all(servers.map(async (server) => {
+  // Call Proxmox API for each server
+  const [resources, nodes] = await Promise.all([
+    fetchProxmoxApi(server, '/cluster/resources'),
+    fetchProxmoxApi(server, '/nodes'),
+  ]);
+  return { serverId: server.id, resources, nodes };
 }));
+
+// Aggregate stats
+const stats = {
+  totalVMs: 0,
+  runningVMs: 0,
+  totalContainers: 0,
+  runningContainers: 0,
+  cpuUsage: { used: 0, total: 0 },
+  memoryUsage: { used: 0, total: 0 },
+  storageUsage: { used: 0, total: 0 },
+  nodes: { online: 0, offline: 0 },
+};
+
+// Process each server's data...
 ```
 
-### 3.3 Update VMCard Component
+---
 
-**File: `src/components/dashboard/VMCard.tsx`**
+## Part 3: Frontend Hook Updates
 
-Add a Tailscale indicator badge:
+### 3.1 Update useProxmoxServers Hook
 
-```tsx
-import { Link2 } from "lucide-react";
+**File: `src/hooks/useProxmoxServers.ts`**
 
-// In the card header, next to server name badge
-{vm.useTailscale && (
-  <Tooltip>
-    <TooltipTrigger asChild>
-      <Badge variant="outline" className="text-xs text-blue-600 border-blue-600">
-        <Link2 className="h-3 w-3 mr-1" />
-        Tailscale
-      </Badge>
-    </TooltipTrigger>
-    <TooltipContent>
-      <p>Connected via Tailscale</p>
-      {vm.tailscaleHostname && (
-        <p className="text-xs text-muted-foreground">{vm.tailscaleHostname}</p>
-      )}
-    </TooltipContent>
-  </Tooltip>
-)}
+Add tenantId parameter to all operations:
+
+```typescript
+export function useProxmoxServers(tenantId?: string) {
+  // Pass tenantId to all API calls
+  const fetchServers = useCallback(async () => {
+    const response = await fetch(
+      `${API_CONFIG.SUPABASE_URL}${API_CONFIG.FUNCTIONS_PATH}/proxmox-servers`,
+      {
+        method: "GET",
+        headers,
+        body: tenantId ? JSON.stringify({ tenantId }) : undefined,
+      }
+    );
+  }, [tenantId]);
+  
+  // ... similar changes for create, update, delete
+}
 ```
 
-Visual design:
-- Blue outline badge with Link2 icon
-- Tooltip showing "Connected via Tailscale" and the hostname
-- Positioned after the server name badge
+### 3.2 Create useTenantStats Hook
 
-### 3.4 Update VMTable Component
+**File: `src/hooks/useTenantStats.ts`** (Enhanced)
 
-**File: `src/components/dashboard/VMTable.tsx`**
+Real-time statistics with auto-refresh:
 
-Add Tailscale indicator to the Server column:
+```typescript
+export function useLiveTenantStats(tenantId: string) {
+  return useQuery({
+    queryKey: ["tenant-live-stats", tenantId],
+    queryFn: async () => {
+      const response = await supabase.functions.invoke("tenant-stats", {
+        body: { action: "get-live-stats", tenantId },
+      });
+      return response.data.stats;
+    },
+    refetchInterval: 10000, // Refresh every 10 seconds
+    enabled: !!tenantId,
+  });
+}
+```
+
+---
+
+## Part 4: Tenant User Management Page
+
+### 4.1 New Page Component
+
+**File: `src/pages/TenantUsers.tsx`** (New)
+
+A dedicated page to manage tenant user assignments:
+
+```text
++------------------------------------------------------------------+
+| Tenant Users - ACME Corp                    [Back] [Add User]    |
++------------------------------------------------------------------+
+| Search users...                                                   |
++------------------------------------------------------------------+
+| User                  | Email                | Role    | Actions  |
+|----------------------|---------------------|---------|----------|
+| John Doe             | john@example.com    | Admin   | [▼]      |
+| Jane Smith           | jane@example.com    | Manager | [▼]      |
+| Bob Wilson           | bob@example.com     | Viewer  | [▼]      |
++------------------------------------------------------------------+
+```
+
+**Features:**
+- List all users assigned to the tenant with their roles
+- Add new user by email with role selection
+- Change user role (Admin → Manager → Viewer)
+- Remove user from tenant
+- Role badges with colors (Admin: Red, Manager: Orange, Viewer: Blue)
+
+### 4.2 Component Structure
 
 ```tsx
-<TableCell className="text-muted-foreground">
-  <div className="flex items-center gap-1">
-    {vm.serverName || "-"}
-    {vm.useTailscale && (
-      <Tooltip>
-        <TooltipTrigger>
-          <Link2 className="h-3 w-3 text-blue-600" />
-        </TooltipTrigger>
-        <TooltipContent>
-          <p>Tailscale: {vm.tailscaleHostname}</p>
-        </TooltipContent>
-      </Tooltip>
-    )}
-  </div>
-</TableCell>
+export default function TenantUsers() {
+  const { tenantId } = useParams();
+  const { users, isLoading, assignUser, removeUser } = useTenantUsers(tenantId);
+  
+  return (
+    <TenantLayout>
+      <div className="p-6 space-y-6">
+        {/* Header with Add User button */}
+        <div className="flex items-center justify-between">
+          <h1>Manage Users</h1>
+          <AddUserDialog tenantId={tenantId} />
+        </div>
+        
+        {/* Users Table */}
+        <Table>
+          <TableHeader>...</TableHeader>
+          <TableBody>
+            {users.map(user => (
+              <TableRow key={user.id}>
+                <TableCell>{user.profiles.full_name || user.profiles.email}</TableCell>
+                <TableCell>{user.profiles.email}</TableCell>
+                <TableCell><RoleBadge role={user.role} /></TableCell>
+                <TableCell>
+                  <UserActionsMenu 
+                    user={user} 
+                    onChangeRole={...} 
+                    onRemove={...} 
+                  />
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </div>
+    </TenantLayout>
+  );
+}
+```
+
+### 4.3 Add User Dialog
+
+```tsx
+function AddUserDialog({ tenantId }: { tenantId: string }) {
+  const [email, setEmail] = useState("");
+  const [role, setRole] = useState<TenantRole>("viewer");
+  const { assignUser } = useTenantUsers(tenantId);
+  const { data: allUsers } = useAllProfiles(); // For autocomplete
+  
+  return (
+    <Dialog>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Add User to Tenant</DialogTitle>
+        </DialogHeader>
+        
+        {/* Email/User search with autocomplete */}
+        <Combobox 
+          options={allUsers} 
+          onSelect={setEmail}
+          placeholder="Search by email..."
+        />
+        
+        {/* Role selector */}
+        <Select value={role} onValueChange={setRole}>
+          <SelectItem value="admin">Admin - Full access</SelectItem>
+          <SelectItem value="manager">Manager - Can manage servers</SelectItem>
+          <SelectItem value="viewer">Viewer - Read-only access</SelectItem>
+        </Select>
+        
+        <Button onClick={() => assignUser({ userId, role })}>
+          Add User
+        </Button>
+      </DialogContent>
+    </Dialog>
+  );
+}
+```
+
+---
+
+## Part 5: Update TenantDashboard with Real-Time Stats
+
+### 5.1 Enhanced Dashboard Layout
+
+**File: `src/pages/TenantDashboard.tsx`**
+
+```text
++------------------------------------------------------------------+
+| ACME Corp Environment                   [Refresh] [Servers]      |
++------------------------------------------------------------------+
+| Stats Grid (Auto-updating every 10s)                              |
+| +--------+  +--------+  +--------+  +--------+                   |
+| | Nodes  |  | VMs    |  | LXC    |  | Servers|                   |
+| | 3 🟢   |  | 24▶ 5■ |  | 8▶ 2■  |  | 4 🟢   |                   |
+| +--------+  +--------+  +--------+  +--------+                   |
+|                                                                   |
+| Resource Usage (Live)                                             |
+| +------------------+  +------------------+  +------------------+ |
+| | CPU: 45%         |  | Memory: 78%      |  | Storage: 24%     | |
+| | [========     ]  |  | [===========  ]  |  | [====          ] | |
+| | 14.4 / 32 cores  |  | 62.4 / 80 GB     |  | 2.4 / 10 TB      | |
+| +------------------+  +------------------+  +------------------+ |
+|                                                                   |
+| Node Status                                                       |
+| +------------------+  +------------------+  +------------------+ |
+| | pve1.local  🟢   |  | pve2.local  🟢   |  | pve3.local  🟢   | |
+| | CPU: 32% Mem:65% |  | CPU: 45% Mem:82% |  | CPU: 58% Mem:71% | |
+| +------------------+  +------------------+  +------------------+ |
++------------------------------------------------------------------+
+```
+
+### 5.2 Real-Time Data Integration
+
+```tsx
+export default function TenantDashboard() {
+  const { tenantId } = useParams();
+  
+  // Real-time stats with 10s refresh
+  const { data: liveStats, isLoading: isStatsLoading } = useLiveTenantStats(tenantId);
+  
+  // Cluster resources with 15s refresh  
+  const { data: resources, refetch } = useClusterResources(tenantId);
+  
+  // Nodes with 30s refresh
+  const { data: nodes } = useNodes(tenantId);
+  
+  return (
+    <TenantLayout>
+      {/* Auto-refresh indicator */}
+      <div className="flex items-center gap-2 text-xs text-muted-foreground">
+        <Activity className="h-3 w-3 animate-pulse text-green-500" />
+        Live updates enabled
+      </div>
+      
+      {/* Stats using liveStats data */}
+      <StatCard
+        title="Virtual Machines"
+        value={liveStats?.totalVMs || 0}
+        subValue={`${liveStats?.runningVMs || 0} running`}
+        icon={Server}
+      />
+      
+      {/* Resource bars using real-time data */}
+      <ResourceCard
+        title="CPU Usage"
+        used={liveStats?.cpuUsage.used || 0}
+        total={liveStats?.cpuUsage.total || 1}
+        unit="cores"
+        icon={Cpu}
+      />
+    </TenantLayout>
+  );
+}
+```
+
+---
+
+## Part 6: Update ProxmoxServers Page for Tenant Context
+
+### 6.1 Accept Tenant Parameter
+
+**File: `src/pages/ProxmoxServers.tsx`**
+
+```tsx
+interface ProxmoxServersProps {
+  tenantId?: string;
+  hideLayout?: boolean;
+}
+
+export default function ProxmoxServers({ tenantId, hideLayout }: ProxmoxServersProps) {
+  // Use tenant-scoped hook
+  const { servers, createServer, ... } = useProxmoxServers(tenantId);
+  
+  // Validate user has permission to add servers
+  const { canManageServers } = useTenantPermissions(tenantId);
+  
+  // Hide Add Server button if user doesn't have manager+ role
+  {canManageServers && (
+    <Button onClick={() => handleOpenDialog()}>
+      <Plus className="h-4 w-4 mr-2" />
+      Add Server
+    </Button>
+  )}
+}
+```
+
+---
+
+## Part 7: New Routes
+
+### 7.1 Add Tenant Users Route
+
+**File: `src/App.tsx`**
+
+```tsx
+// Add new route for tenant user management
+<Route
+  path="/tenants/:tenantId/users"
+  element={
+    <ProtectedRoute>
+      <Suspense fallback={<PageLoader />}>
+        <TenantUsers />
+      </Suspense>
+    </ProtectedRoute>
+  }
+/>
+```
+
+---
+
+## Part 8: Type Updates
+
+### 8.1 Extended Types
+
+**File: `src/lib/types.ts`**
+
+```typescript
+// Enhanced tenant stats with live data
+export interface LiveTenantStats {
+  totalVMs: number;
+  runningVMs: number;
+  stoppedVMs: number;
+  totalContainers: number;
+  runningContainers: number;
+  nodes: {
+    total: number;
+    online: number;
+    offline: number;
+  };
+  cpuUsage: {
+    used: number;
+    total: number;
+    percentage: number;
+  };
+  memoryUsage: {
+    used: number;
+    total: number;
+    percentage: number;
+  };
+  storageUsage: {
+    used: number;
+    total: number;
+    percentage: number;
+  };
+  servers: {
+    total: number;
+    online: number;
+    offline: number;
+  };
+  lastUpdated: string;
+}
+
+// Tenant user with profile info
+export interface TenantUserAssignment {
+  id: string;
+  user_id: string;
+  tenant_id: string;
+  role: TenantRole;
+  created_at: string;
+  profile: {
+    id: string;
+    email: string;
+    full_name: string | null;
+    username: string | null;
+    avatar_url: string | null;
+  };
+}
 ```
 
 ---
@@ -297,18 +542,38 @@ Add Tailscale indicator to the Server column:
 
 | Step | Task | Files |
 |------|------|-------|
-| 1 | Database migration for connection_timeout | SQL migration |
-| 2 | Update VM and ProxmoxServer types | `src/lib/types.ts` |
-| 3 | Update shared proxmox-utils | `supabase/functions/_shared/proxmox-utils.ts` |
+| 1 | Database migration for tenant-scoped RLS | SQL migration |
+| 2 | Update types with LiveTenantStats | `src/lib/types.ts` |
+| 3 | Create tenant-stats edge function | `supabase/functions/tenant-stats/index.ts` |
 | 4 | Update proxmox-servers edge function | `supabase/functions/proxmox-servers/index.ts` |
-| 5 | Update list-vms edge function with Tailscale info | `supabase/functions/list-vms/index.ts` |
-| 6 | Update vm-actions and vm-console functions | Edge functions |
-| 7 | Create TailscaleFunnelHelp component | `src/components/servers/TailscaleFunnelHelp.tsx` |
-| 8 | Update ProxmoxServers page with timeout slider | `src/pages/ProxmoxServers.tsx` |
-| 9 | Update VMCard with Tailscale indicator | `src/components/dashboard/VMCard.tsx` |
-| 10 | Update VMTable with Tailscale indicator | `src/components/dashboard/VMTable.tsx` |
-| 11 | Update CSVImportDialog for timeout column | `src/components/servers/CSVImportDialog.tsx` |
-| 12 | Deploy edge functions | Deployment |
+| 5 | Update list-vms edge function | `supabase/functions/list-vms/index.ts` |
+| 6 | Update tenants edge function for user lookups | `supabase/functions/tenants/index.ts` |
+| 7 | Update useProxmoxServers hook | `src/hooks/useProxmoxServers.ts` |
+| 8 | Create useTenantPermissions hook | `src/hooks/useTenantPermissions.ts` |
+| 9 | Enhance useTenants hook | `src/hooks/useTenants.ts` |
+| 10 | Create TenantUsers page | `src/pages/TenantUsers.tsx` |
+| 11 | Update TenantDashboard with live stats | `src/pages/TenantDashboard.tsx` |
+| 12 | Update ProxmoxServers for tenant context | `src/pages/ProxmoxServers.tsx` |
+| 13 | Add route for tenant users | `src/App.tsx` |
+| 14 | Deploy edge functions | Deployment |
+
+---
+
+## Security Considerations
+
+1. **Role-Based Access Control**
+   - Viewers: Read-only access to servers and VMs
+   - Managers: Can add/edit servers, start/stop VMs
+   - Admins: Full control including user management and server deletion
+
+2. **Tenant Isolation**
+   - RLS policies ensure users only see servers in their assigned tenants
+   - Edge functions validate tenant access before all operations
+   - No cross-tenant data leakage possible
+
+3. **System Admin Override**
+   - System admins (from `user_roles` table) can access all tenants
+   - Used for support and troubleshooting
 
 ---
 
@@ -316,86 +581,13 @@ Add Tailscale indicator to the Server column:
 
 | Component | Changes |
 |-----------|---------|
-| **Database** | Add `connection_timeout` column (integer, default 10000ms) |
-| **Types** | Add `connection_timeout` to server types, `useTailscale` and `tailscaleHostname` to VM interface |
-| **Shared Utils** | Add `timeout` to `ProxmoxCredentials` interface |
-| **Edge Functions** | Use configurable timeout in all fetch calls, include Tailscale info in VM data |
-| **TailscaleFunnelHelp** | New component with Funnel setup documentation |
-| **ProxmoxServers page** | Add timeout slider, integrate Funnel help, show Funnel badge |
-| **VMCard** | Add blue Tailscale badge with tooltip |
-| **VMTable** | Add Tailscale icon in Server column |
-| **CSVImportDialog** | Support `connection_timeout` column |
-
----
-
-## UI/UX Details
-
-### Timeout Slider
-
-```
-Connection Timeout
-[─────────●──────────────] 30s
-
-5s ──────────────────────── 120s
-     ↑ Direct    Tailscale ↑
-```
-
-- Range: 5-120 seconds
-- Step: 5 seconds
-- Shows current value next to slider
-- Helper text below recommends 10-15s for direct, 30-60s for Tailscale
-
-### Tailscale Indicator on VM Cards
-
-```
-+-------------------------------------------+
-| [Server Icon] Web Server                  |
-| QEMU • Node: pve1 • ID: 101              |
-| [Production] [🔗 Tailscale]              |  <- Blue Tailscale badge
-|                                           |
-| CPU: [======     ] 45%                   |
-| Memory: [========  ] 78%                 |
-+-------------------------------------------+
-```
-
-### Funnel Badge on Server Cards
-
-```
-+-------------------------------------------+
-| Server: Production Cluster                |
-| Host: pve1.company.com:8006              |
-| Tailscale: pve.tail1234.ts.net [Funnel]  |  <- Purple Funnel badge
-| Status: ● Online                          |
-+-------------------------------------------+
-```
-
----
-
-## Security Considerations
-
-1. **Timeout Limits**: Maximum timeout capped at 120 seconds to prevent abuse
-2. **Funnel Security**: Document that Funnel URLs are publicly accessible
-3. **Tailscale Info Exposure**: Only show Tailscale hostnames to authenticated users
-
----
-
-## Technical Notes
-
-### Why Custom Timeouts Matter for Tailscale
-
-- Tailscale connections may traverse multiple relay servers (DERP)
-- Initial connection establishment can take longer than direct connections
-- High-latency paths require longer timeouts to avoid false negatives
-- Default 10-second timeout often insufficient for distant Tailscale peers
-
-### Tailscale Funnel vs Direct Tailscale
-
-| Feature | Direct Tailscale | Tailscale Funnel |
-|---------|------------------|------------------|
-| Requires Tailnet membership | Yes | No |
-| Public access | No | Yes |
-| Edge function compatibility | Requires Tailscale | Works natively |
-| Security | Tailnet auth | HTTPS + optional auth |
-
-Funnel is recommended for Supabase Edge Functions since they cannot join a Tailnet.
-
+| **Database** | Update RLS policies from user-scoped to tenant-scoped |
+| **tenant-stats** | New edge function for real-time aggregated stats |
+| **proxmox-servers** | Accept tenantId, query by tenant instead of user |
+| **list-vms** | Filter VMs by tenant's servers |
+| **tenants** | Add user lookup action for autocomplete |
+| **TenantUsers** | New page for managing tenant user assignments |
+| **TenantDashboard** | Real-time stats with 10s auto-refresh |
+| **ProxmoxServers** | Accept tenantId prop, permission-based UI |
+| **Types** | LiveTenantStats, TenantUserAssignment interfaces |
+| **Routes** | Add /tenants/:tenantId/users route |
