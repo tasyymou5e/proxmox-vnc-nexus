@@ -1,4 +1,5 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { getProxmoxCredentials } from "../_shared/proxmox-utils.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -19,6 +20,12 @@ interface VM {
   maxdisk?: number;
   uptime?: number;
   template?: boolean;
+  serverId?: string;
+  serverName?: string;
+}
+
+interface ListVMsRequest {
+  serverId?: string;
 }
 
 Deno.serve(async (req) => {
@@ -63,14 +70,39 @@ Deno.serve(async (req) => {
 
     const isAdmin = roleData?.role === "admin";
 
-    // Get Proxmox credentials
-    const proxmoxHost = Deno.env.get("PROXMOX_HOST");
-    const proxmoxPort = Deno.env.get("PROXMOX_PORT") || "8006";
-    const proxmoxToken = Deno.env.get("PROXMOX_API_TOKEN");
+    // Parse request body for optional serverId
+    let serverId: string | undefined;
+    try {
+      const body: ListVMsRequest = await req.json();
+      serverId = body.serverId;
+    } catch {
+      // No body or invalid JSON, continue without serverId
+    }
 
-    if (!proxmoxHost || !proxmoxToken) {
+    // Get Proxmox credentials (from database if serverId provided, else from env)
+    let proxmoxHost: string;
+    let proxmoxPort: string;
+    let proxmoxToken: string;
+    let serverName: string | undefined;
+
+    try {
+      const credentials = await getProxmoxCredentials(supabase, userId, serverId);
+      proxmoxHost = credentials.host;
+      proxmoxPort = credentials.port;
+      proxmoxToken = credentials.token;
+      
+      // Get server name if serverId provided
+      if (serverId) {
+        const { data: server } = await supabase
+          .from("proxmox_servers")
+          .select("name")
+          .eq("id", serverId)
+          .single();
+        serverName = server?.name;
+      }
+    } catch (error) {
       return new Response(
-        JSON.stringify({ error: "Proxmox configuration missing" }),
+        JSON.stringify({ error: error.message }),
         { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
@@ -112,12 +144,14 @@ Deno.serve(async (req) => {
       const assignedVmIds = assignments.map((a) => a.vm_id);
       vms = vms.filter((vm) => assignedVmIds.includes(vm.vmid));
 
-      // Add permissions to each VM
+      // Add permissions and server info to each VM
       vms = vms.map((vm) => {
         const assignment = assignments.find((a) => a.vm_id === vm.vmid);
         return {
           ...vm,
           permissions: assignment?.permissions || ["view"],
+          serverId,
+          serverName,
         };
       });
     } else {
@@ -125,11 +159,13 @@ Deno.serve(async (req) => {
       vms = vms.map((vm) => ({
         ...vm,
         permissions: ["view", "console", "start", "stop", "restart"],
+        serverId,
+        serverName,
       }));
     }
 
     return new Response(
-      JSON.stringify({ vms, isAdmin }),
+      JSON.stringify({ vms, isAdmin, serverId, serverName }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   } catch (error) {

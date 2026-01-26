@@ -1,4 +1,5 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { getProxmoxCredentials } from "../_shared/proxmox-utils.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -9,6 +10,7 @@ interface ConsoleRequest {
   node: string;
   vmid: number;
   vmType?: "qemu" | "lxc";
+  serverId?: string;
 }
 
 Deno.serve(async (req) => {
@@ -45,7 +47,7 @@ Deno.serve(async (req) => {
     const userId = userData.user.id;
 
     // Get request body
-    const { node, vmid, vmType = "qemu" }: ConsoleRequest = await req.json();
+    const { node, vmid, vmType = "qemu", serverId }: ConsoleRequest = await req.json();
 
     if (!node || !vmid) {
       return new Response(
@@ -81,14 +83,19 @@ Deno.serve(async (req) => {
       }
     }
 
-    // Get Proxmox credentials
-    const proxmoxHost = Deno.env.get("PROXMOX_HOST");
-    const proxmoxPort = Deno.env.get("PROXMOX_PORT") || "8006";
-    const proxmoxToken = Deno.env.get("PROXMOX_API_TOKEN");
+    // Get Proxmox credentials (from database if serverId provided, else from env)
+    let proxmoxHost: string;
+    let proxmoxPort: string;
+    let proxmoxToken: string;
 
-    if (!proxmoxHost || !proxmoxToken) {
+    try {
+      const credentials = await getProxmoxCredentials(supabase, userId, serverId);
+      proxmoxHost = credentials.host;
+      proxmoxPort = credentials.port;
+      proxmoxToken = credentials.token;
+    } catch (error) {
       return new Response(
-        JSON.stringify({ error: "Proxmox configuration missing" }),
+        JSON.stringify({ error: error.message }),
         { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }

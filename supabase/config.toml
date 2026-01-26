@@ -18,5 +18,8 @@ verify_jwt = false
 [functions.delete-user]
 verify_jwt = false
 
+[functions.proxmox-servers]
+verify_jwt = false
+
 [edge_runtime]
 policy = "per_worker"

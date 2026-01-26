@@ -21,6 +21,7 @@ import {
   Menu,
   X,
   Settings,
+  Database,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -44,6 +45,11 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
       label: "Dashboard",
       href: "/dashboard",
       icon: LayoutDashboard,
+    },
+    {
+      label: "Servers",
+      href: "/servers",
+      icon: Database,
     },
     {
       label: "Settings",

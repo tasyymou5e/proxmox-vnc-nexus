@@ -67,3 +67,24 @@ export interface ConnectionSession {
   ended_at: string | null;
   status: string;
 }
+
+export interface ProxmoxServer {
+  id: string;
+  user_id: string;
+  name: string;
+  host: string;
+  port: number;
+  verify_ssl: boolean;
+  is_active: boolean;
+  last_connected_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ProxmoxServerInput {
+  name: string;
+  host: string;
+  port: number;
+  api_token: string;
+  verify_ssl?: boolean;
+}
