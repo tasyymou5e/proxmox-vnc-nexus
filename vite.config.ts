@@ -20,7 +20,7 @@ export default defineConfig(({ mode }) => ({
     },
   },
   optimizeDeps: {
-    include: ["@novnc/novnc/core/rfb"],
+    include: ["@novnc/novnc"],
   },
   build: {
     commonjsOptions: {
