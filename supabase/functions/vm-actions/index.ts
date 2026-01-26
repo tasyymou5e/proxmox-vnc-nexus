@@ -117,9 +117,10 @@ Deno.serve(async (req) => {
     let proxmoxHost: string;
     let proxmoxPort: string;
     let proxmoxToken: string;
+    let credentials: { host: string; port: string; token: string; timeout: number };
 
     try {
-      const credentials = await getProxmoxCredentials(supabase, userId, serverId);
+      credentials = await getProxmoxCredentials(supabase, userId, serverId);
       proxmoxHost = credentials.host;
       proxmoxPort = credentials.port;
       proxmoxToken = credentials.token;
@@ -142,12 +143,14 @@ Deno.serve(async (req) => {
 
     const endpoint = actionEndpointMap[action];
     const actionUrl = `https://${proxmoxHost}:${proxmoxPort}/api2/json/nodes/${node}/${vmType}/${vmid}/status/${endpoint}`;
+    const timeout = credentials.timeout || 10000;
     
     const actionResponse = await fetch(actionUrl, {
       method: "POST",
       headers: {
         "Authorization": `PVEAPIToken=${proxmoxToken}`,
       },
+      signal: AbortSignal.timeout(timeout),
     });
 
     const actionData = await actionResponse.json();

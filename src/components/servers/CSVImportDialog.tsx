@@ -45,6 +45,7 @@ interface ParsedServer extends ProxmoxServerInput {
   use_tailscale?: boolean;
   tailscale_hostname?: string;
   tailscale_port?: number;
+  connection_timeout?: number;
 }
 
 export function CSVImportDialog({ 
@@ -76,9 +77,9 @@ export function CSVImportDialog({
   };
 
   const downloadTemplate = () => {
-    const template = `name,host,port,api_token,verify_ssl,use_tailscale,tailscale_hostname,tailscale_port
-Production Cluster,pve1.company.com,8006,user@realm!tokenid=uuid-here,true,false,,
-Development Server,192.168.1.100,8006,dev@pam!devtoken=uuid-here,false,true,pve.tailnet.ts.net,8006`;
+    const template = `name,host,port,api_token,verify_ssl,use_tailscale,tailscale_hostname,tailscale_port,connection_timeout
+Production Cluster,pve1.company.com,8006,user@realm!tokenid=uuid-here,true,false,,,10
+Development Server,192.168.1.100,8006,dev@pam!devtoken=uuid-here,false,true,pve.tailnet.ts.net,8006,30`;
     
     const blob = new Blob([template], { type: "text/csv" });
     const url = URL.createObjectURL(blob);
@@ -166,6 +167,9 @@ Development Server,192.168.1.100,8006,dev@pam!devtoken=uuid-here,false,true,pve.
           case "tailscale_port":
             server.tailscale_port = parseInt(value) || 8006;
             break;
+          case "connection_timeout":
+            server.connection_timeout = parseInt(value) || undefined;
+            break;
         }
       });
 
@@ -180,6 +184,7 @@ Development Server,192.168.1.100,8006,dev@pam!devtoken=uuid-here,false,true,pve.
         use_tailscale: server.use_tailscale || false,
         tailscale_hostname: server.tailscale_hostname,
         tailscale_port: server.tailscale_port || 8006,
+        connection_timeout: server.connection_timeout,
         isValid,
         errors,
       });
@@ -264,6 +269,7 @@ Development Server,192.168.1.100,8006,dev@pam!devtoken=uuid-here,false,true,pve.
           use_tailscale: server.use_tailscale,
           tailscale_hostname: server.tailscale_hostname,
           tailscale_port: server.tailscale_port,
+          connection_timeout: server.connection_timeout,
         }))
       );
       setImportResult(result);
@@ -292,7 +298,7 @@ Development Server,192.168.1.100,8006,dev@pam!devtoken=uuid-here,false,true,pve.
           </DialogTitle>
           <DialogDescription>
             Upload a CSV file with your server details. Required columns: name, host, api_token.
-            Optional: port, verify_ssl, use_tailscale, tailscale_hostname, tailscale_port.
+            Optional: port, verify_ssl, use_tailscale, tailscale_hostname, tailscale_port, connection_timeout (in seconds).
           </DialogDescription>
         </DialogHeader>
 

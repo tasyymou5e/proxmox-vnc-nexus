@@ -35,6 +35,10 @@ interface ServerInfo {
   host: string;
   port: number;
   api_token_encrypted: string;
+  use_tailscale: boolean;
+  tailscale_hostname: string | null;
+  tailscale_port: number | null;
+  connection_timeout: number | null;
 }
 
 Deno.serve(async (req) => {
@@ -96,7 +100,7 @@ Deno.serve(async (req) => {
       // Query specific server
       const { data: server } = await supabase
         .from("proxmox_servers")
-        .select("id, name, host, port, api_token_encrypted")
+        .select("id, name, host, port, api_token_encrypted, use_tailscale, tailscale_hostname, tailscale_port, connection_timeout")
         .eq("id", serverId)
         .eq("is_active", true)
         .single();
@@ -108,7 +112,7 @@ Deno.serve(async (req) => {
       // Query all active servers for the user (or all servers for admin)
       const { data: servers } = await supabase
         .from("proxmox_servers")
-        .select("id, name, host, port, api_token_encrypted")
+        .select("id, name, host, port, api_token_encrypted, use_tailscale, tailscale_hostname, tailscale_port, connection_timeout")
         .eq("is_active", true)
         .order("name");
 
@@ -167,11 +171,18 @@ Deno.serve(async (req) => {
     await Promise.all(serversToQuery.map(async (server) => {
       try {
         const decryptedToken = decryptToken(server.api_token_encrypted, encryptionKey!);
-        const proxmoxUrl = `https://${server.host}:${server.port}/api2/json/cluster/resources?type=vm`;
+        
+        // Use Tailscale host/port if enabled
+        const useTailscale = server.use_tailscale && !!server.tailscale_hostname;
+        const effectiveHost = useTailscale ? server.tailscale_hostname : server.host;
+        const effectivePort = useTailscale ? (server.tailscale_port || server.port) : server.port;
+        const timeout = server.connection_timeout || 10000;
+        
+        const proxmoxUrl = `https://${effectiveHost}:${effectivePort}/api2/json/cluster/resources?type=vm`;
         
         const proxmoxResponse = await fetch(proxmoxUrl, {
           headers: { "Authorization": `PVEAPIToken=${decryptedToken}` },
-          signal: AbortSignal.timeout(15000), // 15 second timeout
+          signal: AbortSignal.timeout(timeout),
         });
 
         if (proxmoxResponse.ok) {
@@ -180,6 +191,8 @@ Deno.serve(async (req) => {
             ...vm,
             serverId: server.id,
             serverName: server.name,
+            useTailscale,
+            tailscaleHostname: useTailscale ? server.tailscale_hostname : null,
           }));
           allVMs.push(...vms);
           serversList.push({ id: server.id, name: server.name });

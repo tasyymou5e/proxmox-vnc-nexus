@@ -39,6 +39,7 @@ interface ServerInput {
   use_tailscale?: boolean;
   tailscale_hostname?: string;
   tailscale_port?: number;
+  connection_timeout?: number;
 }
 
 interface HealthCheckResult {
@@ -105,7 +106,7 @@ Deno.serve(async (req) => {
       // List all servers for the user
       const { data: servers, error } = await supabase
         .from("proxmox_servers")
-        .select("id, name, host, port, verify_ssl, is_active, last_connected_at, created_at, updated_at, connection_status, last_health_check_at, health_check_error, use_tailscale, tailscale_hostname, tailscale_port")
+        .select("id, name, host, port, verify_ssl, is_active, last_connected_at, created_at, updated_at, connection_status, last_health_check_at, health_check_error, use_tailscale, tailscale_hostname, tailscale_port, connection_timeout")
         .eq("user_id", userId)
         .order("created_at", { ascending: false });
 
@@ -129,7 +130,7 @@ Deno.serve(async (req) => {
       if (action === "health-check-all" || body.action === "health-check-all") {
         const { data: servers } = await supabase
           .from("proxmox_servers")
-          .select("id, name, host, port, api_token_encrypted, is_active, use_tailscale, tailscale_hostname, tailscale_port")
+          .select("id, name, host, port, api_token_encrypted, is_active, use_tailscale, tailscale_hostname, tailscale_port, connection_timeout")
           .eq("user_id", userId)
           .eq("is_active", true);
 
@@ -157,11 +158,12 @@ Deno.serve(async (req) => {
             const useTailscale = server.use_tailscale && !!server.tailscale_hostname;
             const effectiveHost = useTailscale ? server.tailscale_hostname : server.host;
             const effectivePort = useTailscale ? (server.tailscale_port || server.port) : server.port;
+            const timeout = server.connection_timeout || 10000;
             
             const testUrl = `https://${effectiveHost}:${effectivePort}/api2/json/nodes`;
             const testResponse = await fetch(testUrl, {
               headers: { "Authorization": `PVEAPIToken=${decryptedToken}` },
-              signal: AbortSignal.timeout(10000), // 10 second timeout
+              signal: AbortSignal.timeout(timeout),
             });
 
             if (testResponse.ok) {
@@ -271,20 +273,27 @@ Deno.serve(async (req) => {
 
           const encryptedToken = encryptToken(server.api_token, encryptionKey);
 
+          const insertData: Record<string, unknown> = {
+            user_id: userId,
+            name: server.name.trim(),
+            host: server.host.trim(),
+            port: server.port || 8006,
+            api_token_encrypted: encryptedToken,
+            verify_ssl: server.verify_ssl !== false,
+            connection_status: 'unknown',
+            use_tailscale: server.use_tailscale || false,
+            tailscale_hostname: server.tailscale_hostname?.trim() || null,
+            tailscale_port: server.tailscale_port || 8006,
+          };
+          
+          // Add connection_timeout if provided (in seconds from CSV, convert to ms)
+          if ((server as ServerInput & { connection_timeout?: number }).connection_timeout) {
+            insertData.connection_timeout = (server as ServerInput & { connection_timeout?: number }).connection_timeout! * 1000;
+          }
+
           const { error: insertError } = await supabase
             .from("proxmox_servers")
-            .insert({
-              user_id: userId,
-              name: server.name.trim(),
-              host: server.host.trim(),
-              port: server.port || 8006,
-              api_token_encrypted: encryptedToken,
-              verify_ssl: server.verify_ssl !== false,
-              connection_status: 'unknown',
-              use_tailscale: server.use_tailscale || false,
-              tailscale_hostname: server.tailscale_hostname?.trim() || null,
-              tailscale_port: server.tailscale_port || 8006,
-            });
+            .insert(insertData);
 
           if (insertError) {
             if (insertError.code === "23505") {
@@ -314,12 +323,13 @@ Deno.serve(async (req) => {
         let tokenToUse = api_token;
         let serverHost = host;
         let serverPort = port;
+        let timeout = 10000;
         
         // If server_id is provided, get the token from database
         if (server_id && !api_token) {
           const { data: server } = await supabase
             .from("proxmox_servers")
-            .select("api_token_encrypted, host, port, use_tailscale, tailscale_hostname, tailscale_port")
+            .select("api_token_encrypted, host, port, use_tailscale, tailscale_hostname, tailscale_port, connection_timeout")
             .eq("id", server_id)
             .eq("user_id", userId)
             .single();
@@ -337,6 +347,7 @@ Deno.serve(async (req) => {
           const useTailscale = server.use_tailscale && !!server.tailscale_hostname;
           serverHost = useTailscale ? server.tailscale_hostname : server.host;
           serverPort = useTailscale ? (server.tailscale_port || server.port) : server.port;
+          timeout = server.connection_timeout || 10000;
         }
 
         if (!serverHost || !serverPort || !tokenToUse) {
@@ -352,6 +363,7 @@ Deno.serve(async (req) => {
             headers: {
               "Authorization": `PVEAPIToken=${tokenToUse}`,
             },
+            signal: AbortSignal.timeout(timeout),
           });
 
           const testData = await testResponse.json();
@@ -435,7 +447,8 @@ Deno.serve(async (req) => {
         verify_ssl = true,
         use_tailscale = false,
         tailscale_hostname,
-        tailscale_port = 8006
+        tailscale_port = 8006,
+        connection_timeout = 10000
       }: ServerInput = body;
 
       if (!name || !host || !port || !api_token) {
@@ -483,8 +496,9 @@ Deno.serve(async (req) => {
           use_tailscale,
           tailscale_hostname: tailscale_hostname?.trim() || null,
           tailscale_port,
+          connection_timeout: Math.min(Math.max(connection_timeout, 5000), 120000), // Clamp between 5s and 120s
         })
-        .select("id, name, host, port, verify_ssl, is_active, created_at, updated_at, connection_status, last_health_check_at, health_check_error, use_tailscale, tailscale_hostname, tailscale_port")
+        .select("id, name, host, port, verify_ssl, is_active, created_at, updated_at, connection_status, last_health_check_at, health_check_error, use_tailscale, tailscale_hostname, tailscale_port, connection_timeout")
         .single();
 
       if (error) {

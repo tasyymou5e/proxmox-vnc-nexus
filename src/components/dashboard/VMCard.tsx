@@ -4,6 +4,7 @@ import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/componen
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { VMStatusBadge } from "./VMStatusBadge";
 import { ResourceMeter } from "./ResourceMeter";
 import { useVMAction } from "@/hooks/useVMs";
@@ -16,7 +17,8 @@ import {
   RotateCcw, 
   MoreVertical, 
   Loader2,
-  Server
+  Server,
+  Link2
 } from "lucide-react";
 
 interface VMCardProps {
@@ -76,9 +78,29 @@ export function VMCard({ vm }: VMCardProps) {
                 {vm.type.toUpperCase()} • Node: {vm.node} • ID: {vm.vmid}
               </p>
               {vm.serverName && (
-                <Badge variant="secondary" className="text-xs mt-1">
-                  {vm.serverName}
-                </Badge>
+                <div className="flex items-center gap-1 mt-1 flex-wrap">
+                  <Badge variant="secondary" className="text-xs">
+                    {vm.serverName}
+                  </Badge>
+                  {vm.useTailscale && (
+                    <TooltipProvider>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Badge variant="outline" className="text-xs text-primary border-primary">
+                            <Link2 className="h-3 w-3 mr-1" />
+                            Tailscale
+                          </Badge>
+                        </TooltipTrigger>
+                        <TooltipContent>
+                          <p>Connected via Tailscale</p>
+                          {vm.tailscaleHostname && (
+                            <p className="text-xs text-muted-foreground">{vm.tailscaleHostname}</p>
+                          )}
+                        </TooltipContent>
+                      </Tooltip>
+                    </TooltipProvider>
+                  )}
+                </div>
               )}
             </div>
           </div>
