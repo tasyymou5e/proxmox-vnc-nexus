@@ -6,16 +6,17 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { useTenantPermissions } from "@/hooks/useTenantPermissions";
 import { useTenantSettings } from "@/hooks/useTenantSettings";
+import { useRealtimeNotifications } from "@/hooks/useRealtimeNotifications";
+import { LiveStatusIndicator } from "@/components/servers/LiveStatusIndicator";
 import { format, formatDistanceToNow, isToday, isYesterday, startOfDay } from "date-fns";
 import {
   Bell,
   BellOff,
-  Server,
   AlertTriangle,
   CheckCircle2,
   XCircle,
@@ -211,6 +212,9 @@ export default function NotificationsCenter() {
   const { settings } = useTenantSettings(tenantId);
   const [activeTab, setActiveTab] = useState<NotificationType>("all");
 
+  // Subscribe to real-time notification updates
+  useRealtimeNotifications(tenantId);
+
   // Fetch notification-related audit logs
   const { data: events, isLoading, refetch } = useQuery({
     queryKey: ["notifications", tenantId, activeTab],
@@ -292,6 +296,7 @@ export default function NotificationsCenter() {
             <p className="text-muted-foreground">
               View all alerts, status changes, and system notifications
             </p>
+            <LiveStatusIndicator tenantId={tenantId} />
           </div>
           <div className="flex items-center gap-2">
             <Button variant="outline" size="sm" onClick={() => refetch()}>
