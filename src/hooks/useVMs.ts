@@ -3,10 +3,10 @@ import { listVMs, performVMAction, getVMConsole } from "@/lib/api";
 import { INTERVALS } from "@/lib/constants";
 import type { VM, VNCConnection } from "@/lib/types";
 
-export function useVMs() {
+export function useVMs(serverId?: string) {
   return useQuery({
-    queryKey: ["vms"],
-    queryFn: listVMs,
+    queryKey: ["vms", serverId],
+    queryFn: () => listVMs(serverId === "all" ? undefined : serverId),
     refetchInterval: INTERVALS.VM_LIST,
     staleTime: INTERVALS.STALE_TIME,
     gcTime: INTERVALS.GC_TIME,

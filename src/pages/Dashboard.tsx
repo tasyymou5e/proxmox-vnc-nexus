@@ -1,7 +1,8 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { DashboardLayout } from "@/components/layout";
 import { VMCard, VMTable } from "@/components/dashboard";
 import { useVMs } from "@/hooks/useVMs";
+import { useProxmoxServers } from "@/hooks/useProxmoxServers";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -20,6 +21,7 @@ import {
   RefreshCcw,
   Server,
   AlertCircle,
+  Database,
 } from "lucide-react";
 import type { VM } from "@/lib/types";
 
@@ -27,10 +29,17 @@ type ViewMode = "grid" | "table";
 type StatusFilter = "all" | "running" | "stopped" | "paused";
 
 export default function Dashboard() {
-  const { data, isLoading, error, refetch, isRefetching } = useVMs();
+  const [selectedServerId, setSelectedServerId] = useState<string>("all");
+  const { data, isLoading, error, refetch, isRefetching } = useVMs(selectedServerId);
+  const { servers, fetchServers } = useProxmoxServers();
   const [viewMode, setViewMode] = useState<ViewMode>("grid");
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
+
+  // Fetch servers on mount
+  useEffect(() => {
+    fetchServers();
+  }, [fetchServers]);
 
   const filteredVMs = useMemo(() => {
     if (!data?.vms) return [];
@@ -41,7 +50,8 @@ export default function Dashboard() {
         searchQuery === "" ||
         vm.name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
         vm.vmid.toString().includes(searchQuery) ||
-        vm.node.toLowerCase().includes(searchQuery.toLowerCase());
+        vm.node.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        vm.serverName?.toLowerCase().includes(searchQuery.toLowerCase());
 
       // Status filter
       const matchesStatus =
@@ -52,7 +62,9 @@ export default function Dashboard() {
   }, [data?.vms, searchQuery, statusFilter]);
 
   const stats = useMemo(() => {
-    if (!data?.vms) return { total: 0, running: 0, stopped: 0, paused: 0 };
+    if (!data?.vms) return { total: 0, running: 0, stopped: 0, paused: 0, servers: 0 };
+
+    const uniqueServers = new Set(data.vms.map((vm) => vm.serverId).filter(Boolean));
 
     return {
       total: data.vms.length,
@@ -61,8 +73,28 @@ export default function Dashboard() {
       paused: data.vms.filter(
         (vm) => vm.status === "paused" || vm.status === "suspended"
       ).length,
+      servers: uniqueServers.size,
     };
   }, [data?.vms]);
+
+  // Combine servers from API response and hook
+  const availableServers = useMemo(() => {
+    const serverMap = new Map<string, string>();
+    
+    // Add servers from the API response
+    if (data?.servers) {
+      data.servers.forEach((s) => serverMap.set(s.id, s.name));
+    }
+    
+    // Add servers from the hook
+    servers.forEach((s) => {
+      if (s.is_active) {
+        serverMap.set(s.id, s.name);
+      }
+    });
+    
+    return Array.from(serverMap.entries()).map(([id, name]) => ({ id, name }));
+  }, [data?.servers, servers]);
 
   return (
     <DashboardLayout>
@@ -80,6 +112,12 @@ export default function Dashboard() {
               <Server className="h-3 w-3 mr-1" />
               {stats.total} VMs
             </Badge>
+            {stats.servers > 1 && (
+              <Badge variant="outline" className="font-normal">
+                <Database className="h-3 w-3 mr-1" />
+                {stats.servers} Servers
+              </Badge>
+            )}
             <Button
               variant="outline"
               size="sm"
@@ -119,12 +157,31 @@ export default function Dashboard() {
           <div className="relative flex-1">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
             <Input
-              placeholder="Search VMs by name, ID, or node..."
+              placeholder="Search VMs by name, ID, node, or server..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               className="pl-9"
             />
           </div>
+          {availableServers.length > 1 && (
+            <Select
+              value={selectedServerId}
+              onValueChange={setSelectedServerId}
+            >
+              <SelectTrigger className="w-[180px]">
+                <Database className="h-4 w-4 mr-2" />
+                <SelectValue placeholder="All Servers" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Servers</SelectItem>
+                {availableServers.map((s) => (
+                  <SelectItem key={s.id} value={s.id}>
+                    {s.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
           <Select
             value={statusFilter}
             onValueChange={(v) => setStatusFilter(v as StatusFilter)}
@@ -202,7 +259,7 @@ export default function Dashboard() {
         ) : viewMode === "grid" ? (
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
             {filteredVMs.map((vm) => (
-              <VMCard key={`${vm.node}-${vm.vmid}`} vm={vm} />
+              <VMCard key={`${vm.serverId || 'default'}-${vm.node}-${vm.vmid}`} vm={vm} />
             ))}
           </div>
         ) : (

@@ -38,6 +38,20 @@ interface ServerInput {
   verify_ssl?: boolean;
 }
 
+interface HealthCheckResult {
+  serverId: string;
+  serverName: string;
+  status: 'online' | 'offline';
+  error?: string;
+  nodes?: number;
+}
+
+interface ImportError {
+  index: number;
+  name: string;
+  error: string;
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
@@ -88,7 +102,7 @@ Deno.serve(async (req) => {
       // List all servers for the user
       const { data: servers, error } = await supabase
         .from("proxmox_servers")
-        .select("id, name, host, port, verify_ssl, is_active, last_connected_at, created_at, updated_at")
+        .select("id, name, host, port, verify_ssl, is_active, last_connected_at, created_at, updated_at, connection_status, last_health_check_at, health_check_error")
         .eq("user_id", userId)
         .order("created_at", { ascending: false });
 
@@ -108,11 +122,186 @@ Deno.serve(async (req) => {
     if (req.method === "POST") {
       const body = await req.json();
 
+      // Health check all servers
+      if (action === "health-check-all" || body.action === "health-check-all") {
+        const { data: servers } = await supabase
+          .from("proxmox_servers")
+          .select("id, name, host, port, api_token_encrypted, is_active")
+          .eq("user_id", userId)
+          .eq("is_active", true);
+
+        if (!servers || servers.length === 0) {
+          return new Response(
+            JSON.stringify({ results: [], message: "No active servers to check" }),
+            { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+          );
+        }
+
+        const results: HealthCheckResult[] = [];
+
+        // Check all servers in parallel
+        await Promise.all(servers.map(async (server) => {
+          const result: HealthCheckResult = {
+            serverId: server.id,
+            serverName: server.name,
+            status: 'offline',
+          };
+
+          try {
+            const decryptedToken = decryptToken(server.api_token_encrypted, encryptionKey);
+            const testUrl = `https://${server.host}:${server.port}/api2/json/nodes`;
+            const testResponse = await fetch(testUrl, {
+              headers: { "Authorization": `PVEAPIToken=${decryptedToken}` },
+              signal: AbortSignal.timeout(10000), // 10 second timeout
+            });
+
+            if (testResponse.ok) {
+              const testData = await testResponse.json();
+              result.status = 'online';
+              result.nodes = testData.data?.length || 0;
+
+              // Update database
+              await supabase
+                .from("proxmox_servers")
+                .update({
+                  connection_status: 'online',
+                  last_health_check_at: new Date().toISOString(),
+                  last_connected_at: new Date().toISOString(),
+                  health_check_error: null,
+                })
+                .eq("id", server.id)
+                .eq("user_id", userId);
+            } else {
+              const errorData = await testResponse.json().catch(() => ({}));
+              result.error = errorData.errors || `HTTP ${testResponse.status}`;
+
+              await supabase
+                .from("proxmox_servers")
+                .update({
+                  connection_status: 'offline',
+                  last_health_check_at: new Date().toISOString(),
+                  health_check_error: result.error,
+                })
+                .eq("id", server.id)
+                .eq("user_id", userId);
+            }
+          } catch (err) {
+            result.error = err.message || "Connection failed";
+
+            await supabase
+              .from("proxmox_servers")
+              .update({
+                connection_status: 'offline',
+                last_health_check_at: new Date().toISOString(),
+                health_check_error: result.error,
+              })
+              .eq("id", server.id)
+              .eq("user_id", userId);
+          }
+
+          results.push(result);
+        }));
+
+        return new Response(
+          JSON.stringify({ results }),
+          { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+
+      // Bulk import servers
+      if (action === "bulk-import" || body.action === "bulk-import") {
+        const { servers: serversToImport }: { servers: ServerInput[] } = body;
+
+        if (!serversToImport || !Array.isArray(serversToImport) || serversToImport.length === 0) {
+          return new Response(
+            JSON.stringify({ error: "No servers provided for import" }),
+            { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+          );
+        }
+
+        // Check server limit
+        const { count: currentCount } = await supabase
+          .from("proxmox_servers")
+          .select("*", { count: "exact", head: true })
+          .eq("user_id", userId);
+
+        const remainingSlots = 50 - (currentCount || 0);
+        if (serversToImport.length > remainingSlots) {
+          return new Response(
+            JSON.stringify({ 
+              error: `Cannot import ${serversToImport.length} servers. Only ${remainingSlots} slots remaining.` 
+            }),
+            { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+          );
+        }
+
+        const tokenRegex = /^[\w.-]+@[\w.-]+![\w.-]+=[\w-]+$/;
+        const failed: ImportError[] = [];
+        const successful: string[] = [];
+
+        for (let i = 0; i < serversToImport.length; i++) {
+          const server = serversToImport[i];
+          
+          // Validate required fields
+          if (!server.name?.trim()) {
+            failed.push({ index: i, name: server.name || `Server ${i + 1}`, error: "Name is required" });
+            continue;
+          }
+          if (!server.host?.trim()) {
+            failed.push({ index: i, name: server.name, error: "Host is required" });
+            continue;
+          }
+          if (!server.api_token?.trim()) {
+            failed.push({ index: i, name: server.name, error: "API token is required" });
+            continue;
+          }
+          if (!tokenRegex.test(server.api_token)) {
+            failed.push({ index: i, name: server.name, error: "Invalid API token format" });
+            continue;
+          }
+
+          const encryptedToken = encryptToken(server.api_token, encryptionKey);
+
+          const { error: insertError } = await supabase
+            .from("proxmox_servers")
+            .insert({
+              user_id: userId,
+              name: server.name.trim(),
+              host: server.host.trim(),
+              port: server.port || 8006,
+              api_token_encrypted: encryptedToken,
+              verify_ssl: server.verify_ssl !== false,
+              connection_status: 'unknown',
+            });
+
+          if (insertError) {
+            if (insertError.code === "23505") {
+              failed.push({ index: i, name: server.name, error: "Server already exists" });
+            } else {
+              failed.push({ index: i, name: server.name, error: insertError.message });
+            }
+          } else {
+            successful.push(server.name);
+          }
+        }
+
+        return new Response(
+          JSON.stringify({ 
+            success: successful.length, 
+            failed,
+            message: `Imported ${successful.length} of ${serversToImport.length} servers`
+          }),
+          { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+
       // Test connection endpoint
       if (action === "test" || body.action === "test") {
         const { host, port, api_token, server_id } = body;
         
         let tokenToUse = api_token;
+        let serverHost = host;
+        let serverPort = port;
         
         // If server_id is provided, get the token from database
         if (server_id && !api_token) {
@@ -131,9 +320,11 @@ Deno.serve(async (req) => {
           }
           
           tokenToUse = decryptToken(server.api_token_encrypted, encryptionKey);
+          serverHost = server.host;
+          serverPort = server.port;
         }
 
-        if (!host || !port || !tokenToUse) {
+        if (!serverHost || !serverPort || !tokenToUse) {
           return new Response(
             JSON.stringify({ error: "Host, port, and API token are required" }),
             { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
@@ -141,7 +332,7 @@ Deno.serve(async (req) => {
         }
 
         try {
-          const testUrl = `https://${host}:${port}/api2/json/nodes`;
+          const testUrl = `https://${serverHost}:${serverPort}/api2/json/nodes`;
           const testResponse = await fetch(testUrl, {
             headers: {
               "Authorization": `PVEAPIToken=${tokenToUse}`,
@@ -151,6 +342,19 @@ Deno.serve(async (req) => {
           const testData = await testResponse.json();
 
           if (!testResponse.ok) {
+            // Update status if server_id provided
+            if (server_id) {
+              await supabase
+                .from("proxmox_servers")
+                .update({ 
+                  connection_status: 'offline',
+                  last_health_check_at: new Date().toISOString(),
+                  health_check_error: testData.errors || "Connection failed"
+                })
+                .eq("id", server_id)
+                .eq("user_id", userId);
+            }
+
             return new Response(
               JSON.stringify({ 
                 success: false, 
@@ -161,11 +365,16 @@ Deno.serve(async (req) => {
             );
           }
 
-          // Update last_connected_at if server_id was provided
+          // Update last_connected_at and status if server_id was provided
           if (server_id) {
             await supabase
               .from("proxmox_servers")
-              .update({ last_connected_at: new Date().toISOString() })
+              .update({ 
+                last_connected_at: new Date().toISOString(),
+                connection_status: 'online',
+                last_health_check_at: new Date().toISOString(),
+                health_check_error: null
+              })
               .eq("id", server_id)
               .eq("user_id", userId);
           }
@@ -179,6 +388,19 @@ Deno.serve(async (req) => {
             { headers: { ...corsHeaders, "Content-Type": "application/json" } }
           );
         } catch (error) {
+          // Update status if server_id provided
+          if (server_id) {
+            await supabase
+              .from("proxmox_servers")
+              .update({ 
+                connection_status: 'offline',
+                last_health_check_at: new Date().toISOString(),
+                health_check_error: error.message || "Connection failed"
+              })
+              .eq("id", server_id)
+              .eq("user_id", userId);
+          }
+
           return new Response(
             JSON.stringify({ 
               success: false, 
@@ -233,8 +455,9 @@ Deno.serve(async (req) => {
           port,
           api_token_encrypted: encryptedToken,
           verify_ssl,
+          connection_status: 'unknown',
         })
-        .select("id, name, host, port, verify_ssl, is_active, created_at, updated_at")
+        .select("id, name, host, port, verify_ssl, is_active, created_at, updated_at, connection_status, last_health_check_at, health_check_error")
         .single();
 
       if (error) {
@@ -291,7 +514,7 @@ Deno.serve(async (req) => {
         .update(updateData)
         .eq("id", id)
         .eq("user_id", userId)
-        .select("id, name, host, port, verify_ssl, is_active, last_connected_at, created_at, updated_at")
+        .select("id, name, host, port, verify_ssl, is_active, last_connected_at, created_at, updated_at, connection_status, last_health_check_at, health_check_error")
         .single();
 
       if (error) {

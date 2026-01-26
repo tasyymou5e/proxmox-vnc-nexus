@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import {
   Dialog,
   DialogContent,
@@ -24,11 +24,18 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { useProxmoxServers } from "@/hooks/useProxmoxServers";
-import type { ProxmoxServer, ProxmoxServerInput } from "@/lib/types";
+import { CSVImportDialog } from "@/components/servers/CSVImportDialog";
+import type { ProxmoxServer, ProxmoxServerInput, ConnectionStatus } from "@/lib/types";
 import {
   Plus,
   Server,
@@ -39,8 +46,69 @@ import {
   Loader2,
   RefreshCw,
   Search,
+  Upload,
+  Circle,
+  AlertCircle,
 } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
+
+function ConnectionStatusBadge({ status, error }: { status: ConnectionStatus; error?: string | null }) {
+  const getStatusConfig = () => {
+    switch (status) {
+      case "online":
+        return { 
+          icon: <Circle className="h-2 w-2 fill-current" />,
+          label: "Online",
+          className: "text-success border-success"
+        };
+      case "offline":
+        return { 
+          icon: <Circle className="h-2 w-2 fill-current" />,
+          label: "Offline",
+          className: "text-destructive border-destructive"
+        };
+      case "checking":
+        return { 
+          icon: <Loader2 className="h-2 w-2 animate-spin" />,
+          label: "Checking",
+          className: "text-primary border-primary"
+        };
+      default:
+        return { 
+          icon: <Circle className="h-2 w-2" />,
+          label: "Unknown",
+          className: "text-muted-foreground border-muted-foreground"
+        };
+    }
+  };
+
+  const config = getStatusConfig();
+
+  if (error && status === "offline") {
+    return (
+      <TooltipProvider>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Badge variant="outline" className={`${config.className} cursor-help`}>
+              {config.icon}
+              <span className="ml-1">{config.label}</span>
+            </Badge>
+          </TooltipTrigger>
+          <TooltipContent>
+            <p className="max-w-xs">{error}</p>
+          </TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
+    );
+  }
+
+  return (
+    <Badge variant="outline" className={config.className}>
+      {config.icon}
+      <span className="ml-1">{config.label}</span>
+    </Badge>
+  );
+}
 
 export default function ProxmoxServers() {
   const { toast } = useToast();
@@ -48,15 +116,19 @@ export default function ProxmoxServers() {
     servers,
     loading,
     error,
+    healthCheckLoading,
     fetchServers,
     createServer,
     updateServer,
     deleteServer,
     testConnection,
+    runHealthChecks,
+    bulkImportServers,
   } = useProxmoxServers();
 
   const [searchQuery, setSearchQuery] = useState("");
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [importDialogOpen, setImportDialogOpen] = useState(false);
   const [editingServer, setEditingServer] = useState<ProxmoxServer | null>(null);
   const [deleteConfirmServer, setDeleteConfirmServer] = useState<ProxmoxServer | null>(null);
   const [testingServerId, setTestingServerId] = useState<string | null>(null);
@@ -200,6 +272,20 @@ export default function ProxmoxServers() {
     }
   };
 
+  const handleRefreshAll = async () => {
+    toast({
+      title: "Health check started",
+      description: "Checking all server connections...",
+    });
+    const results = await runHealthChecks();
+    const online = results.filter((r) => r.status === "online").length;
+    const offline = results.filter((r) => r.status === "offline").length;
+    toast({
+      title: "Health check complete",
+      description: `${online} online, ${offline} offline`,
+    });
+  };
+
   const handleDelete = async () => {
     if (!deleteConfirmServer) return;
     try {
@@ -235,6 +321,17 @@ export default function ProxmoxServers() {
     }
   };
 
+  const handleImport = async (serversToImport: ProxmoxServerInput[]) => {
+    const result = await bulkImportServers(serversToImport);
+    if (result.success > 0) {
+      toast({
+        title: "Import complete",
+        description: result.message,
+      });
+    }
+    return result;
+  };
+
   return (
     <DashboardLayout>
       <div className="p-6 max-w-6xl mx-auto space-y-6">
@@ -246,103 +343,126 @@ export default function ProxmoxServers() {
               Manage your Proxmox VE server connections
             </p>
           </div>
-          <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-            <DialogTrigger asChild>
-              <Button onClick={() => handleOpenDialog()} disabled={servers.length >= 50}>
-                <Plus className="h-4 w-4 mr-2" />
-                Add Server
-              </Button>
-            </DialogTrigger>
-            <DialogContent className="sm:max-w-md">
-              <form onSubmit={handleSubmit}>
-                <DialogHeader>
-                  <DialogTitle>
-                    {editingServer ? "Edit Server" : "Add Proxmox Server"}
-                  </DialogTitle>
-                  <DialogDescription>
-                    {editingServer
-                      ? "Update your server configuration"
-                      : "Enter your Proxmox VE server details"}
-                  </DialogDescription>
-                </DialogHeader>
-                <div className="space-y-4 py-4">
-                  <div className="space-y-2">
-                    <Label htmlFor="name">Server Name *</Label>
-                    <Input
-                      id="name"
-                      placeholder="Production Cluster"
-                      value={formData.name}
-                      onChange={(e) =>
-                        setFormData({ ...formData, name: e.target.value })
-                      }
-                      maxLength={100}
-                    />
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleRefreshAll}
+              disabled={healthCheckLoading || servers.length === 0}
+            >
+              {healthCheckLoading ? (
+                <Loader2 className="h-4 w-4 animate-spin mr-2" />
+              ) : (
+                <RefreshCw className="h-4 w-4 mr-2" />
+              )}
+              Refresh All
+            </Button>
+            <Button
+              variant="outline"
+              onClick={() => setImportDialogOpen(true)}
+              disabled={servers.length >= 50}
+            >
+              <Upload className="h-4 w-4 mr-2" />
+              Import CSV
+            </Button>
+            <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+              <DialogTrigger asChild>
+                <Button onClick={() => handleOpenDialog()} disabled={servers.length >= 50}>
+                  <Plus className="h-4 w-4 mr-2" />
+                  Add Server
+                </Button>
+              </DialogTrigger>
+              <DialogContent className="sm:max-w-md">
+                <form onSubmit={handleSubmit}>
+                  <DialogHeader>
+                    <DialogTitle>
+                      {editingServer ? "Edit Server" : "Add Proxmox Server"}
+                    </DialogTitle>
+                    <DialogDescription>
+                      {editingServer
+                        ? "Update your server configuration"
+                        : "Enter your Proxmox VE server details"}
+                    </DialogDescription>
+                  </DialogHeader>
+                  <div className="space-y-4 py-4">
+                    <div className="space-y-2">
+                      <Label htmlFor="name">Server Name *</Label>
+                      <Input
+                        id="name"
+                        placeholder="Production Cluster"
+                        value={formData.name}
+                        onChange={(e) =>
+                          setFormData({ ...formData, name: e.target.value })
+                        }
+                        maxLength={100}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="host">Host/IP Address *</Label>
+                      <Input
+                        id="host"
+                        placeholder="pve.example.com or 192.168.1.100"
+                        value={formData.host}
+                        onChange={(e) =>
+                          setFormData({ ...formData, host: e.target.value })
+                        }
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="port">Port *</Label>
+                      <Input
+                        id="port"
+                        type="number"
+                        placeholder="8006"
+                        value={formData.port}
+                        onChange={(e) =>
+                          setFormData({ ...formData, port: parseInt(e.target.value) || 8006 })
+                        }
+                        min={1}
+                        max={65535}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="api_token">
+                        API Token {editingServer ? "(leave blank to keep current)" : "*"}
+                      </Label>
+                      <Input
+                        id="api_token"
+                        type="password"
+                        placeholder="user@realm!tokenid=uuid-token-here"
+                        value={formData.api_token}
+                        onChange={(e) =>
+                          setFormData({ ...formData, api_token: e.target.value })
+                        }
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        Format: USER@REALM!TOKENID=UUID
+                      </p>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <Label htmlFor="verify_ssl">Verify SSL Certificate</Label>
+                      <Switch
+                        id="verify_ssl"
+                        checked={formData.verify_ssl}
+                        onCheckedChange={(checked) =>
+                          setFormData({ ...formData, verify_ssl: checked })
+                        }
+                      />
+                    </div>
                   </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="host">Host/IP Address *</Label>
-                    <Input
-                      id="host"
-                      placeholder="pve.example.com or 192.168.1.100"
-                      value={formData.host}
-                      onChange={(e) =>
-                        setFormData({ ...formData, host: e.target.value })
-                      }
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="port">Port *</Label>
-                    <Input
-                      id="port"
-                      type="number"
-                      placeholder="8006"
-                      value={formData.port}
-                      onChange={(e) =>
-                        setFormData({ ...formData, port: parseInt(e.target.value) || 8006 })
-                      }
-                      min={1}
-                      max={65535}
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="api_token">
-                      API Token {editingServer ? "(leave blank to keep current)" : "*"}
-                    </Label>
-                    <Input
-                      id="api_token"
-                      type="password"
-                      placeholder="user@realm!tokenid=uuid-token-here"
-                      value={formData.api_token}
-                      onChange={(e) =>
-                        setFormData({ ...formData, api_token: e.target.value })
-                      }
-                    />
-                    <p className="text-xs text-muted-foreground">
-                      Format: USER@REALM!TOKENID=UUID
-                    </p>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <Label htmlFor="verify_ssl">Verify SSL Certificate</Label>
-                    <Switch
-                      id="verify_ssl"
-                      checked={formData.verify_ssl}
-                      onCheckedChange={(checked) =>
-                        setFormData({ ...formData, verify_ssl: checked })
-                      }
-                    />
-                  </div>
-                </div>
-                <DialogFooter>
-                  <Button type="button" variant="outline" onClick={handleCloseDialog}>
-                    Cancel
-                  </Button>
-                  <Button type="submit" disabled={formLoading}>
-                    {formLoading && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
-                    {editingServer ? "Save Changes" : "Add Server"}
-                  </Button>
-                </DialogFooter>
-              </form>
-            </DialogContent>
-          </Dialog>
+                  <DialogFooter>
+                    <Button type="button" variant="outline" onClick={handleCloseDialog}>
+                      Cancel
+                    </Button>
+                    <Button type="submit" disabled={formLoading}>
+                      {formLoading && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+                      {editingServer ? "Save Changes" : "Add Server"}
+                    </Button>
+                  </DialogFooter>
+                </form>
+              </DialogContent>
+            </Dialog>
+          </div>
         </div>
 
         {/* Search */}
@@ -382,10 +502,16 @@ export default function ProxmoxServers() {
               <p className="text-muted-foreground mb-4">
                 Add your first Proxmox server to get started
               </p>
-              <Button onClick={() => handleOpenDialog()}>
-                <Plus className="h-4 w-4 mr-2" />
-                Add Server
-              </Button>
+              <div className="flex items-center justify-center gap-2">
+                <Button onClick={() => handleOpenDialog()}>
+                  <Plus className="h-4 w-4 mr-2" />
+                  Add Server
+                </Button>
+                <Button variant="outline" onClick={() => setImportDialogOpen(true)}>
+                  <Upload className="h-4 w-4 mr-2" />
+                  Import CSV
+                </Button>
+              </div>
             </CardContent>
           </Card>
         ) : (
@@ -403,7 +529,7 @@ export default function ProxmoxServers() {
                         <div className="flex items-center gap-2 flex-wrap">
                           <h3 className="font-medium truncate">{server.name}</h3>
                           {server.is_active ? (
-                            <Badge variant="outline" className="text-green-600 border-green-600">
+                            <Badge variant="outline" className="text-success border-success">
                               Active
                             </Badge>
                           ) : (
@@ -411,14 +537,25 @@ export default function ProxmoxServers() {
                               Disabled
                             </Badge>
                           )}
+                          <ConnectionStatusBadge 
+                            status={server.connection_status} 
+                            error={server.health_check_error} 
+                          />
                         </div>
                         <p className="text-sm text-muted-foreground">
                           {server.host}:{server.port}
                         </p>
                         <div className="flex items-center gap-2 mt-1 text-xs text-muted-foreground">
-                          {server.last_connected_at ? (
+                          {server.last_health_check_at ? (
                             <>
-                              <CheckCircle2 className="h-3 w-3 text-green-600" />
+                              Checked{" "}
+                              {formatDistanceToNow(new Date(server.last_health_check_at), {
+                                addSuffix: true,
+                              })}
+                            </>
+                          ) : server.last_connected_at ? (
+                            <>
+                              <CheckCircle2 className="h-3 w-3 text-success" />
                               Last connected{" "}
                               {formatDistanceToNow(new Date(server.last_connected_at), {
                                 addSuffix: true,
@@ -494,15 +631,20 @@ export default function ProxmoxServers() {
             </AlertDialogHeader>
             <AlertDialogFooter>
               <AlertDialogCancel>Cancel</AlertDialogCancel>
-              <AlertDialogAction
-                onClick={handleDelete}
-                className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-              >
+              <AlertDialogAction onClick={handleDelete} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
                 Delete
               </AlertDialogAction>
             </AlertDialogFooter>
           </AlertDialogContent>
         </AlertDialog>
+
+        {/* CSV Import Dialog */}
+        <CSVImportDialog
+          open={importDialogOpen}
+          onOpenChange={setImportDialogOpen}
+          onImport={handleImport}
+          remainingSlots={50 - servers.length}
+        />
       </div>
     </DashboardLayout>
   );
