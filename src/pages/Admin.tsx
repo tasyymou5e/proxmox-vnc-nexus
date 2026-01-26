@@ -29,11 +29,21 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "@/hooks/use-toast";
-import { Users, Plus, Trash2, Server, Shield } from "lucide-react";
+import { Users, Plus, Trash2, Server, Shield, ShieldCheck, ShieldOff } from "lucide-react";
 import type { UserProfile, UserRole, VMAssignment } from "@/lib/types";
 
 interface UserWithRole extends UserProfile {
@@ -53,6 +63,8 @@ export default function Admin() {
     vmName: "",
     permissions: ["view", "console"],
   });
+  const [roleChangeUser, setRoleChangeUser] = useState<UserWithRole | null>(null);
+  const [roleChangeLoading, setRoleChangeLoading] = useState(false);
 
   useEffect(() => {
     if (isAdmin) {
@@ -172,6 +184,38 @@ export default function Admin() {
     }));
   };
 
+  const handleRoleChange = async () => {
+    if (!roleChangeUser) return;
+
+    setRoleChangeLoading(true);
+    try {
+      const newRole = roleChangeUser.role === "admin" ? "user" : "admin";
+
+      const { error } = await supabase
+        .from("user_roles")
+        .update({ role: newRole })
+        .eq("user_id", roleChangeUser.id);
+
+      if (error) throw error;
+
+      toast({
+        title: "Role updated",
+        description: `${roleChangeUser.email} is now a${newRole === "admin" ? "n" : ""} ${newRole}`,
+      });
+
+      setRoleChangeUser(null);
+      fetchData();
+    } catch (error) {
+      toast({
+        title: "Failed to update role",
+        description: error instanceof Error ? error.message : "Unknown error",
+        variant: "destructive",
+      });
+    } finally {
+      setRoleChangeLoading(false);
+    }
+  };
+
   if (!isAdmin) {
     return (
       <DashboardLayout>
@@ -243,21 +287,39 @@ export default function Admin() {
                         {new Date(user.created_at).toLocaleDateString()}
                       </TableCell>
                       <TableCell className="text-right">
-                        <Dialog open={showAssignDialog && selectedUser === user.id}>
-                          <DialogTrigger asChild>
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              onClick={() => {
-                                setSelectedUser(user.id);
-                                setShowAssignDialog(true);
-                              }}
-                            >
-                              <Plus className="h-4 w-4 mr-1" />
-                              Assign VM
-                            </Button>
-                          </DialogTrigger>
-                          <DialogContent>
+                        <div className="flex justify-end gap-2">
+                          <Button
+                            variant={user.role === "admin" ? "outline" : "default"}
+                            size="sm"
+                            onClick={() => setRoleChangeUser(user)}
+                          >
+                            {user.role === "admin" ? (
+                              <>
+                                <ShieldOff className="h-4 w-4 mr-1" />
+                                Demote
+                              </>
+                            ) : (
+                              <>
+                                <ShieldCheck className="h-4 w-4 mr-1" />
+                                Promote
+                              </>
+                            )}
+                          </Button>
+                          <Dialog open={showAssignDialog && selectedUser === user.id}>
+                            <DialogTrigger asChild>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => {
+                                  setSelectedUser(user.id);
+                                  setShowAssignDialog(true);
+                                }}
+                              >
+                                <Plus className="h-4 w-4 mr-1" />
+                                Assign VM
+                              </Button>
+                            </DialogTrigger>
+                            <DialogContent>
                             <DialogHeader>
                               <DialogTitle>Assign VM to User</DialogTitle>
                               <DialogDescription>
@@ -350,7 +412,8 @@ export default function Admin() {
                               </Button>
                             </DialogFooter>
                           </DialogContent>
-                        </Dialog>
+                          </Dialog>
+                        </div>
                       </TableCell>
                     </TableRow>
                   ))}
@@ -430,6 +493,40 @@ export default function Admin() {
             )}
           </CardContent>
         </Card>
+
+        {/* Role Change Confirmation Dialog */}
+        <AlertDialog open={!!roleChangeUser} onOpenChange={(open) => !open && setRoleChangeUser(null)}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>
+                {roleChangeUser?.role === "admin" ? "Demote to User" : "Promote to Admin"}
+              </AlertDialogTitle>
+              <AlertDialogDescription>
+                {roleChangeUser?.role === "admin" ? (
+                  <>
+                    Are you sure you want to demote <strong>{roleChangeUser?.email}</strong> from Admin to User?
+                    They will lose access to the admin panel and can only manage their assigned VMs.
+                  </>
+                ) : (
+                  <>
+                    Are you sure you want to promote <strong>{roleChangeUser?.email}</strong> to Admin?
+                    They will have full access to manage all users and VMs.
+                  </>
+                )}
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel disabled={roleChangeLoading}>Cancel</AlertDialogCancel>
+              <AlertDialogAction
+                onClick={handleRoleChange}
+                disabled={roleChangeLoading}
+                className={roleChangeUser?.role === "admin" ? "bg-destructive hover:bg-destructive/90" : ""}
+              >
+                {roleChangeLoading ? "Updating..." : roleChangeUser?.role === "admin" ? "Demote" : "Promote"}
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       </div>
     </DashboardLayout>
   );
