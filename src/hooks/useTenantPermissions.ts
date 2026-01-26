@@ -10,6 +10,9 @@ interface TenantPermissions {
   canManageUsers: boolean; // admin only
   canDeleteServers: boolean; // admin only
   canViewOnly: boolean; // viewer
+  canManageVMs: boolean; // manager or admin
+  canViewAuditLogs: boolean; // admin only
+  canManageSettings: boolean; // admin only
   hasAccess: boolean;
 }
 
@@ -58,6 +61,9 @@ export function useTenantPermissions(tenantId: string | undefined): TenantPermis
     canManageUsers: role === "admin",
     canDeleteServers: role === "admin",
     canViewOnly: role === "viewer",
+    canManageVMs: role === "admin" || role === "manager",
+    canViewAuditLogs: role === "admin",
+    canManageSettings: role === "admin",
     hasAccess,
   };
 }

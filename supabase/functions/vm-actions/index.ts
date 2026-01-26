@@ -14,6 +14,38 @@ interface ActionRequest {
   action: VMAction;
   vmType?: "qemu" | "lxc";
   serverId?: string;
+  tenantId?: string;
+  vmName?: string;
+  serverName?: string;
+}
+
+// Helper to log audit events
+async function logAudit(
+  supabase: ReturnType<typeof createClient>,
+  tenantId: string,
+  userId: string,
+  actionType: string,
+  resourceType: string,
+  resourceId: string,
+  resourceName: string,
+  details: Record<string, unknown>,
+  req: Request
+) {
+  try {
+    await supabase.from("audit_logs").insert({
+      tenant_id: tenantId,
+      user_id: userId,
+      action_type: actionType,
+      resource_type: resourceType,
+      resource_id: resourceId,
+      resource_name: resourceName,
+      details,
+      ip_address: req.headers.get('x-forwarded-for') || req.headers.get('x-real-ip'),
+      user_agent: req.headers.get('user-agent'),
+    });
+  } catch (error) {
+    console.error("Failed to log audit event:", error);
+  }
 }
 
 Deno.serve(async (req) => {
@@ -50,7 +82,7 @@ Deno.serve(async (req) => {
     const userId = userData.user.id;
 
     // Get request body
-    const { node, vmid, action, vmType = "qemu", serverId }: ActionRequest = await req.json();
+    const { node, vmid, action, vmType = "qemu", serverId, tenantId, vmName, serverName }: ActionRequest = await req.json();
 
     if (!node || !vmid || !action) {
       return new Response(
@@ -159,6 +191,21 @@ Deno.serve(async (req) => {
       return new Response(
         JSON.stringify({ error: `Failed to ${action} VM`, details: actionData }),
         { status: actionResponse.status, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    // Log audit event if tenantId is provided
+    if (tenantId) {
+      await logAudit(
+        supabase,
+        tenantId,
+        userId,
+        `vm_${action}`,
+        'vm',
+        String(vmid),
+        vmName || `VM ${vmid}`,
+        { node, vmType, serverId, serverName, action },
+        req
       );
     }
 

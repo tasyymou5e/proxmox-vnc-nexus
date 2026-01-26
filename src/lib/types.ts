@@ -259,3 +259,84 @@ export interface ApiTreeNode {
   children?: ApiTreeNode[];
   data?: unknown;
 }
+
+// Tenant Settings
+export interface TenantSettings {
+  id: string;
+  tenant_id: string;
+  primary_color: string;
+  secondary_color: string;
+  accent_color: string;
+  logo_url: string | null;
+  notification_email: string | null;
+  notify_on_server_offline: boolean;
+  notify_on_vm_action: boolean;
+  notify_on_user_changes: boolean;
+  default_connection_timeout: number;
+  default_verify_ssl: boolean;
+  auto_health_check_interval: number;
+  created_at: string;
+  updated_at: string;
+}
+
+// Audit Logs
+export interface AuditLog {
+  id: string;
+  tenant_id: string;
+  user_id: string;
+  action_type: AuditActionType;
+  resource_type: 'server' | 'vm' | 'user' | 'settings';
+  resource_id: string | null;
+  resource_name: string | null;
+  details: Record<string, unknown>;
+  ip_address: string | null;
+  user_agent: string | null;
+  created_at: string;
+  profiles?: {
+    email: string;
+    full_name: string | null;
+  };
+}
+
+export type AuditActionType = 
+  | 'server_added' | 'server_deleted' | 'server_updated'
+  | 'vm_started' | 'vm_stopped' | 'vm_restarted' | 'vm_shutdown' | 'vm_reset' | 'vm_suspend' | 'vm_resume'
+  | 'user_invited' | 'user_removed' | 'role_changed'
+  | 'settings_updated';
+
+// Connectivity Test
+export interface ConnectivityTestResult {
+  success: boolean;
+  timing: {
+    dnsResolutionMs: number;
+    tcpConnectionMs: number;
+    tlsHandshakeMs: number;
+    apiResponseMs: number;
+    totalLatencyMs: number;
+  };
+  resolvedIp: string;
+  connectionType: 'direct' | 'tailscale';
+  tailscaleInfo?: {
+    hostname: string;
+    port: number;
+  };
+  proxmoxVersion?: string;
+  nodeCount?: number;
+  error?: string;
+  errorStage?: 'dns' | 'tcp' | 'tls' | 'api';
+  recommendedTimeoutMs: number;
+  currentTimeoutMs: number;
+}
+
+// Connection Metrics
+export interface ConnectionMetric {
+  id: string;
+  server_id: string;
+  success: boolean;
+  response_time_ms: number | null;
+  error_message: string | null;
+  used_tailscale: boolean;
+  timeout_used_ms: number | null;
+  retry_count: number;
+  created_at: string;
+}
