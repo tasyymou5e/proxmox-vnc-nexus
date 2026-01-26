@@ -2,6 +2,21 @@
 
 A multi-tenant Proxmox VE connection broker enabling secure VM console access through a modern web interface.
 
+## 📚 Documentation Index
+
+| Document | Description |
+|----------|-------------|
+| [README.md](./README.md) | This file - Overview, architecture, and technical reference |
+| [ARCHITECTURE.md](./ARCHITECTURE.md) | Detailed system architecture with Mermaid diagrams |
+| [API.md](./API.md) | Edge Function API reference and examples |
+| [DEPLOYMENT.md](./DEPLOYMENT.md) | Production deployment guide |
+| [SECURITY.md](./SECURITY.md) | Security model, RLS policies, and best practices |
+| [CONTRIBUTING.md](./CONTRIBUTING.md) | Contribution guidelines and development setup |
+| [CHANGELOG.md](./CHANGELOG.md) | Version history and release notes |
+| [TROUBLESHOOTING.md](./TROUBLESHOOTING.md) | Common issues and solutions |
+
+---
+
 ## Table of Contents
 
 - [Overview](#overview)
