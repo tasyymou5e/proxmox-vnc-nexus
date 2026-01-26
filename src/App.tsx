@@ -31,6 +31,7 @@ const TenantAuditLog = lazy(() => import("./pages/TenantAuditLog"));
 const ProxmoxApiExplorer = lazy(() => import("./pages/ProxmoxApiExplorer"));
 const ApiPlayground = lazy(() => import("./pages/ApiPlayground"));
 const ServerMonitoring = lazy(() => import("./pages/ServerMonitoring"));
+const NotificationsCenter = lazy(() => import("./pages/NotificationsCenter"));
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -228,6 +229,16 @@ function AppRoutes() {
             <ProtectedRoute>
               <Suspense fallback={<PageLoader />}>
                 <ServerMonitoring />
+              </Suspense>
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/tenants/:tenantId/notifications"
+          element={
+            <ProtectedRoute>
+              <Suspense fallback={<PageLoader />}>
+                <NotificationsCenter />
               </Suspense>
             </ProtectedRoute>
           }
