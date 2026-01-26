@@ -79,7 +79,7 @@ export function useRealtimeNotifications(tenantId: string | undefined) {
         "postgres_changes",
         {
           event: "INSERT",
-          schema: "public",
+          schema: "api",
           table: "audit_logs",
           filter: `tenant_id=eq.${tenantId}`,
         },

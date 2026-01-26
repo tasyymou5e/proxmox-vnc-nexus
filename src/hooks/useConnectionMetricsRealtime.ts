@@ -19,7 +19,7 @@ export function useConnectionMetricsRealtime(serverId: string | undefined) {
         "postgres_changes",
         {
           event: "INSERT",
-          schema: "public",
+          schema: "api",
           table: "connection_metrics",
           filter: `server_id=eq.${serverId}`,
         },

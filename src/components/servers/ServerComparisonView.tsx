@@ -57,7 +57,7 @@ export function ServerComparisonView({ tenantId, servers: propServers, isLoading
         .order("name");
       
       if (error) throw error;
-      return data as ServerData[];
+      return (data || []) as ServerData[];
     },
     enabled: !!tenantId && !propServers,
     refetchInterval: 30000,
