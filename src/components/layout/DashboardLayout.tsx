@@ -20,6 +20,7 @@ import {
   LogOut,
   Menu,
   X,
+  Settings,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -43,6 +44,11 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
       label: "Dashboard",
       href: "/dashboard",
       icon: LayoutDashboard,
+    },
+    {
+      label: "Settings",
+      href: "/profile",
+      icon: Settings,
     },
     ...(isAdmin
       ? [
@@ -98,6 +104,10 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
               )}
             </DropdownMenuLabel>
             <DropdownMenuSeparator />
+            <DropdownMenuItem onClick={() => navigate("/profile")}>
+              <Settings className="h-4 w-4 mr-2" />
+              Profile Settings
+            </DropdownMenuItem>
             <DropdownMenuItem onClick={handleSignOut}>
               <LogOut className="h-4 w-4 mr-2" />
               Sign out
@@ -181,7 +191,7 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="w-56">
-                <DropdownMenuLabel>
+              <DropdownMenuLabel>
                   My Account
                   {isAdmin && (
                     <Badge variant="secondary" className="ml-2 text-xs">
@@ -190,6 +200,10 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
                   )}
                 </DropdownMenuLabel>
                 <DropdownMenuSeparator />
+                <DropdownMenuItem onClick={() => navigate("/profile")}>
+                  <Settings className="h-4 w-4 mr-2" />
+                  Profile Settings
+                </DropdownMenuItem>
                 <DropdownMenuItem onClick={handleSignOut}>
                   <LogOut className="h-4 w-4 mr-2" />
                   Sign out

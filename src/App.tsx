@@ -16,6 +16,7 @@ import { Loader2 } from "lucide-react";
 const Dashboard = lazy(() => import("./pages/Dashboard"));
 const Console = lazy(() => import("./pages/Console"));
 const Admin = lazy(() => import("./pages/Admin"));
+const Profile = lazy(() => import("./pages/Profile"));
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -104,6 +105,16 @@ function AppRoutes() {
           <ProtectedRoute>
             <Suspense fallback={<PageLoader />}>
               <Admin />
+            </Suspense>
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/profile"
+        element={
+          <ProtectedRoute>
+            <Suspense fallback={<PageLoader />}>
+              <Profile />
             </Suspense>
           </ProtectedRoute>
         }
