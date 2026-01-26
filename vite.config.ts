@@ -23,6 +23,7 @@ export default defineConfig(({ mode }) => ({
     include: ["@novnc/novnc"],
   },
   build: {
+    target: "esnext",
     commonjsOptions: {
       include: [/@novnc\/novnc/, /node_modules/],
     },
