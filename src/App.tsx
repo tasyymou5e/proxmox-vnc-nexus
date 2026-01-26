@@ -18,6 +18,7 @@ const Console = lazy(() => import("./pages/Console"));
 const Admin = lazy(() => import("./pages/Admin"));
 const Profile = lazy(() => import("./pages/Profile"));
 const ProxmoxServers = lazy(() => import("./pages/ProxmoxServers"));
+const Docs = lazy(() => import("./pages/Docs"));
 
 // Tenant pages
 const TenantSelector = lazy(() => import("./pages/TenantSelector"));
@@ -88,6 +89,14 @@ function AppRoutes() {
           <PublicRoute>
             <Login />
           </PublicRoute>
+        }
+      />
+      <Route
+        path="/docs"
+        element={
+          <Suspense fallback={<PageLoader />}>
+            <Docs />
+          </Suspense>
         }
       />
       <Route
