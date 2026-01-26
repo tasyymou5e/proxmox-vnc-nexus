@@ -11,7 +11,7 @@ import {
   AlertCircle,
   Clipboard,
 } from "lucide-react";
-import RFB from "@novnc/novnc/core/rfb";
+import RFB from "@novnc/novnc";
 
 interface ConsoleViewerProps {
   connection: VNCConnection | null;
