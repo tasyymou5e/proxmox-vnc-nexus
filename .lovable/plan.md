@@ -1,64 +1,110 @@
 
-# Fix Profile Loading and Update - Supabase Schema Configuration Issue
+# Fix Persistent HTTP 412 Error - Force Complete Rebuild
 
-## Problem Identified
-The profile page fails to load and updates fail because the **PostgREST API is configured to only expose the `api` schema**, but all application tables (profiles, tenants, user_roles, etc.) are in the `public` schema.
+## Current Status
+The site is completely down with **HTTP ERROR 412 (Precondition Failed)** on both preview and published URLs. Multiple code changes have been attempted but the server continues to serve cached responses with mismatched ETags.
 
-### Error Evidence
+## Investigation Summary
+
+| File | Status |
+|------|--------|
+| index.html | Valid - correct structure |
+| src/main.tsx | Valid - has BUILD_VERSION console.log |
+| src/App.tsx | Valid - all routes configured correctly |
+| vite.config.ts | Valid - proper build configuration |
+| src/components/ErrorBoundary.tsx | Valid - class component |
+| src/components/theme/ThemeProvider.tsx | Valid - uses next-themes |
+| src/components/auth/AuthProvider.tsx | Valid - session handling correct |
+| package.json | Valid - all dependencies correct |
+
+**Browser Behavior:**
+- Main document request fails with 412 (net::ERR_HTTP_RESPONSE_CODE_FAILURE)
+- No JavaScript/CSS loads because the HTML document itself fails
+- Reload button continues to return 412
+
+## Root Cause Analysis
+HTTP 412 occurs when:
+1. Browser sends `If-Match` or `If-None-Match` header with cached ETag
+2. Server's current ETag doesn't match
+3. Server responds with 412 instead of the content
+
+The Lovable preview server has:
+- Stale cached assets with old ETags
+- Multiple cache layers that haven't invalidated
+- Previous rebuilds only changed JS bundles, not the HTML entry point
+
+## Solution Strategy
+Modify the **index.html** file directly to force a completely new document fingerprint. This bypasses all JavaScript bundle caching because the HTML document itself will be different.
+
+## Implementation
+
+### File: index.html
+Add a cache-busting meta tag and updated timestamp:
+
+```html
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="build-version" content="2026-01-26T23:35:00Z" />
+    <title>Proxmox VNC Nexus</title>
+    <meta name="description" content="Virtual Machine Connection Broker" />
+    <meta name="author" content="Lovable" />
+
+    <meta property="og:title" content="Proxmox VNC Nexus" />
+    <meta property="og:description" content="Virtual Machine Connection Broker" />
+    <meta property="og:type" content="website" />
+    <meta property="og:image" content="https://lovable.dev/opengraph-image-p98pqg.png" />
+
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:site" content="@lovable_dev" />
+    <meta name="twitter:image" content="https://lovable.dev/opengraph-image-p98pqg.png" />
+  </head>
+
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
 ```
-PGRST106: The schema must be one of the following: api
-```
 
-This error occurs when:
-- The frontend client queries the `profiles` table
-- Edge functions query any table (`profiles`, `user_roles`, `tenants`, `user_tenant_assignments`)
+**Changes Made:**
+1. Added `build-version` meta tag with new timestamp - forces new HTML fingerprint
+2. Updated title to "Proxmox VNC Nexus" - more meaningful
+3. Updated description to "Virtual Machine Connection Broker"
+4. Updated og:title and og:description to match
 
-## Root Cause
-In the Supabase Dashboard, under **Settings > API > Exposed schemas**, only the `api` schema is configured. The `public` schema needs to be added for the application to work.
+## Why This Should Work
+- The HTML document is the entry point - changing it forces a completely new response
+- The server cannot use cached HTML because the content hash is different
+- This bypasses all JavaScript/CSS caching issues
+- The browser will receive fresh content without ETag matching
 
-## Solution
+## Expected Outcome
+After deployment (30-60 seconds):
+1. HTTP 412 errors should resolve
+2. Browser receives fresh index.html
+3. JavaScript and CSS load normally
+4. Console shows "Proxmox VNC Nexus v2026-01-26T23:20:00Z"
+5. Login page renders correctly
 
-### Step 1: Update Supabase Dashboard Configuration (Manual Step Required)
-You need to update the PostgREST configuration in the Supabase Dashboard:
+## Verification Plan
+Once the site loads, I will verify:
+1. Login page renders with email/password form
+2. User can authenticate
+3. Dashboard loads after login
+4. Sidebar navigation works (Dashboard, Tenants, Servers, Settings, Documentation)
+5. Profile page loads (though PGRST106 error may still occur until schema is fixed)
 
-1. Go to [Supabase Dashboard](https://supabase.com/dashboard/project/lbfabewnshfjdjfosqxl/settings/api)
-2. Navigate to **Settings > API**
-3. Scroll to **Exposed schemas** section
-4. Add `public` to the list of exposed schemas (it should read: `api, public` or just `public`)
-5. Click **Save**
+## Files to Modify
 
-This change will allow the REST API to access tables in the `public` schema.
+| File | Change |
+|------|--------|
+| index.html | Add build-version meta, update title/description |
 
-### Step 2: Verify Configuration (After Manual Step)
-After updating the exposed schemas, the following will work:
-- Profile loading on `/profile` page
-- Profile updates (full_name, username, company_name)
-- Tenant listing and management
-- User role checks
-- All other database operations
-
-## Why This Happened
-This is an external Supabase project (not Lovable Cloud). The project was configured with restricted API schema exposure - likely for security or migration purposes. However, since all application tables are in the `public` schema, this restriction breaks all functionality.
-
-## Technical Details
-
-| Component | Issue |
-|-----------|-------|
-| Profile.tsx line 43-47 | Queries `profiles` table - fails with PGRST106 |
-| Profile.tsx line 113-121 | Updates `profiles` table - fails with PGRST106 |
-| tenants edge function | Queries `user_roles`, `tenants`, `profiles` - fails with PGRST106 |
-| list-vms edge function | Queries tenant/server data - likely affected |
-
-## Alternative Solution (If Schema Change Not Possible)
-If the `api` schema restriction is intentional and cannot be changed, an alternative would be to:
-1. Create views in the `api` schema that expose needed data from `public` schema
-2. Update all code to reference the `api` schema views
-
-However, this is significantly more work and the simpler solution is to add `public` to the exposed schemas.
-
-## Files That Will Work After Fix
-No code changes needed - once the Supabase configuration is updated:
-- `src/pages/Profile.tsx` - Profile loading and saving
-- `supabase/functions/tenants/index.ts` - Tenant operations
-- `supabase/functions/list-vms/index.ts` - VM listing
-- All other edge functions querying public schema tables
+## Fallback Plan
+If the 412 still persists after this change:
+1. The issue may be at the Lovable infrastructure level requiring support intervention
+2. Check if the published URL has different behavior
+3. Consider creating a minimal test project to isolate the issue
