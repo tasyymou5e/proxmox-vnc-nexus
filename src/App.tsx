@@ -27,6 +27,7 @@ const TenantUsers = lazy(() => import("./pages/TenantUsers"));
 const TenantSettings = lazy(() => import("./pages/TenantSettings"));
 const TenantAuditLog = lazy(() => import("./pages/TenantAuditLog"));
 const ProxmoxApiExplorer = lazy(() => import("./pages/ProxmoxApiExplorer"));
+const ApiPlayground = lazy(() => import("./pages/ApiPlayground"));
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -196,6 +197,16 @@ function AppRoutes() {
             <ProtectedRoute>
               <Suspense fallback={<PageLoader />}>
                 <TenantAuditLog />
+              </Suspense>
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/tenants/:tenantId/api-playground"
+          element={
+            <ProtectedRoute>
+              <Suspense fallback={<PageLoader />}>
+                <ApiPlayground />
               </Suspense>
             </ProtectedRoute>
           }

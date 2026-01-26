@@ -29,6 +29,7 @@ import {
   Database,
   FileText,
   Palette,
+  Code2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ApiTreeNav } from "@/components/proxmox/ApiTreeNav";
@@ -66,6 +67,7 @@ export function TenantLayout({ children, showApiTree = false }: TenantLayoutProp
     { label: "Access", href: `/tenants/${tenantId}/access`, icon: Shield },
     { label: "Pools", href: `/tenants/${tenantId}/pools`, icon: Layers },
     { label: "Storage", href: `/tenants/${tenantId}/storage`, icon: Database },
+    { label: "API Playground", href: `/tenants/${tenantId}/api-playground`, icon: Code2 },
     { label: "Servers", href: `/tenants/${tenantId}/servers`, icon: Settings },
     { label: "Users", href: `/tenants/${tenantId}/users`, icon: Building2 },
     { label: "Audit Log", href: `/tenants/${tenantId}/audit-log`, icon: FileText },
