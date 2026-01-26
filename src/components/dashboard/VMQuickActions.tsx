@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -12,7 +13,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import { Play, Square, RotateCcw, Loader2, Monitor, Link2 } from "lucide-react";
+import { Play, Square, RotateCcw, Loader2, Monitor, Link2, Terminal } from "lucide-react";
 import type { VM } from "@/lib/types";
 
 interface VMQuickActionsProps {
@@ -23,11 +24,16 @@ interface VMQuickActionsProps {
 }
 
 export function VMQuickActions({ vm, onAction, isPerformingAction, canManage }: VMQuickActionsProps) {
+  const navigate = useNavigate();
   const [confirmAction, setConfirmAction] = useState<"stop" | "reset" | null>(null);
   const [isExecuting, setIsExecuting] = useState(false);
   
   const isRunning = vm.status === "running";
   const isStopped = vm.status === "stopped";
+
+  const handleOpenConsole = () => {
+    navigate(`/console/${vm.node}/${vm.vmid}?type=${vm.type}${vm.serverId ? `&serverId=${vm.serverId}` : ''}`);
+  };
   
   const handleAction = async (action: "start" | "stop" | "reset") => {
     if (action === "stop" || action === "reset") {
@@ -103,6 +109,21 @@ export function VMQuickActions({ vm, onAction, isPerformingAction, canManage }: 
               </Button>
             ) : isRunning ? (
               <>
+                <TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={handleOpenConsole}
+                        className="text-primary hover:text-primary hover:bg-primary/10"
+                      >
+                        <Terminal className="h-4 w-4" />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>Open Console</TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
                 <TooltipProvider>
                   <Tooltip>
                     <TooltipTrigger asChild>

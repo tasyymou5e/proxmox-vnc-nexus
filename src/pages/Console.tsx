@@ -12,6 +12,7 @@ export default function Console() {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const vmType = (searchParams.get("type") as "qemu" | "lxc") || "qemu";
+  const serverId = searchParams.get("serverId");
 
   const vmConsole = useVMConsole();
   const [connection, setConnection] = useState<VNCConnection | null>(null);
@@ -26,6 +27,7 @@ export default function Console() {
         node,
         vmid: parseInt(vmid),
         vmType,
+        serverId: serverId || undefined,
       });
       setConnection(data);
     } catch (err) {
@@ -35,7 +37,7 @@ export default function Console() {
 
   useEffect(() => {
     fetchConsole();
-  }, [node, vmid, vmType]);
+  }, [node, vmid, vmType, serverId]);
 
   return (
     <DashboardLayout>

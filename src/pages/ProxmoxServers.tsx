@@ -30,11 +30,16 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { useProxmoxServers } from "@/hooks/useProxmoxServers";
-import { CSVImportDialog, TailscaleFunnelHelp } from "@/components/servers";
+import { CSVImportDialog, TailscaleFunnelHelp, ConnectionHistoryChart, LiveStatusIndicator } from "@/components/servers";
 import { Slider } from "@/components/ui/slider";
 import type { ProxmoxServer, ProxmoxServerInput, ConnectionStatus } from "@/lib/types";
 import {
@@ -52,6 +57,8 @@ import {
   AlertCircle,
   Link2,
   ExternalLink,
+  ChevronDown,
+  Activity,
 } from "lucide-react";
 import { Separator } from "@/components/ui/separator";
 import { formatDistanceToNow } from "date-fns";
@@ -384,6 +391,7 @@ export default function ProxmoxServers({ tenantId, hideLayout }: ProxmoxServersP
             <p className="text-muted-foreground">
               Manage your Proxmox VE server connections
             </p>
+            {tenantId && <LiveStatusIndicator tenantId={tenantId} />}
           </div>
           <div className="flex items-center gap-2">
             <Button
@@ -641,115 +649,129 @@ export default function ProxmoxServers({ tenantId, hideLayout }: ProxmoxServersP
         ) : (
           <div className="space-y-4">
             {filteredServers.map((server) => (
-              <Card key={server.id}>
-                <CardContent className="p-6">
-                  <div className="flex flex-col sm:flex-row sm:items-center gap-4">
-                    {/* Server icon and info */}
-                    <div className="flex items-start gap-4 flex-1">
-                      <div className="h-10 w-10 rounded-lg bg-primary/10 flex items-center justify-center shrink-0">
-                        <Server className="h-5 w-5 text-primary" />
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <h3 className="font-medium truncate">{server.name}</h3>
-                          {server.is_active ? (
-                            <Badge variant="outline" className="text-success border-success">
-                              Active
-                            </Badge>
-                          ) : (
-                            <Badge variant="outline" className="text-muted-foreground">
-                              Disabled
-                            </Badge>
-                          )}
-                          <ConnectionStatusBadge 
-                            status={server.connection_status} 
-                            error={server.health_check_error} 
-                          />
-                          {server.use_tailscale && server.tailscale_hostname?.includes('.ts.net') && (
-                            <Badge variant="outline" className="text-xs text-accent-foreground border-accent">
-                              <ExternalLink className="h-3 w-3 mr-1" />
-                              Funnel
-                            </Badge>
-                          )}
+              <Collapsible key={server.id}>
+                <Card>
+                  <CardContent className="p-6">
+                    <div className="flex flex-col sm:flex-row sm:items-center gap-4">
+                      {/* Server icon and info */}
+                      <div className="flex items-start gap-4 flex-1">
+                        <div className="h-10 w-10 rounded-lg bg-primary/10 flex items-center justify-center shrink-0">
+                          <Server className="h-5 w-5 text-primary" />
                         </div>
-                        <p className="text-sm text-muted-foreground">
-                          {server.host}:{server.port}
-                        </p>
-                        {server.use_tailscale && server.tailscale_hostname && (
-                          <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                            <div className="flex items-center gap-1">
-                              <Link2 className="h-3 w-3" />
-                              <span className="text-primary">
-                                {server.tailscale_hostname}:{server.tailscale_port || 8006}
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <h3 className="font-medium truncate">{server.name}</h3>
+                            {server.is_active ? (
+                              <Badge variant="outline" className="text-success border-success">
+                                Active
+                              </Badge>
+                            ) : (
+                              <Badge variant="outline" className="text-muted-foreground">
+                                Disabled
+                              </Badge>
+                            )}
+                            <ConnectionStatusBadge 
+                              status={server.connection_status} 
+                              error={server.health_check_error} 
+                            />
+                            {server.use_tailscale && server.tailscale_hostname?.includes('.ts.net') && (
+                              <Badge variant="outline" className="text-xs text-accent-foreground border-accent">
+                                <ExternalLink className="h-3 w-3 mr-1" />
+                                Funnel
+                              </Badge>
+                            )}
+                          </div>
+                          <p className="text-sm text-muted-foreground">
+                            {server.host}:{server.port}
+                          </p>
+                          {server.use_tailscale && server.tailscale_hostname && (
+                            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                              <div className="flex items-center gap-1">
+                                <Link2 className="h-3 w-3" />
+                                <span className="text-primary">
+                                  {server.tailscale_hostname}:{server.tailscale_port || 8006}
+                                </span>
+                              </div>
+                              <span className="text-xs">
+                                ({(server.connection_timeout || 10000) / 1000}s timeout)
                               </span>
                             </div>
-                            <span className="text-xs">
-                              ({(server.connection_timeout || 10000) / 1000}s timeout)
-                            </span>
-                          </div>
-                        )}
-                        <div className="flex items-center gap-2 mt-1 text-xs text-muted-foreground">
-                          {server.last_health_check_at ? (
-                            <>
-                              Checked{" "}
-                              {formatDistanceToNow(new Date(server.last_health_check_at), {
-                                addSuffix: true,
-                              })}
-                            </>
-                          ) : server.last_connected_at ? (
-                            <>
-                              <CheckCircle2 className="h-3 w-3 text-success" />
-                              Last connected{" "}
-                              {formatDistanceToNow(new Date(server.last_connected_at), {
-                                addSuffix: true,
-                              })}
-                            </>
-                          ) : (
-                            <>
-                              <XCircle className="h-3 w-3 text-muted-foreground" />
-                              Not tested
-                            </>
                           )}
+                          <div className="flex items-center gap-2 mt-1 text-xs text-muted-foreground">
+                            {server.last_health_check_at ? (
+                              <>
+                                Checked{" "}
+                                {formatDistanceToNow(new Date(server.last_health_check_at), {
+                                  addSuffix: true,
+                                })}
+                              </>
+                            ) : server.last_connected_at ? (
+                              <>
+                                <CheckCircle2 className="h-3 w-3 text-success" />
+                                Last connected{" "}
+                                {formatDistanceToNow(new Date(server.last_connected_at), {
+                                  addSuffix: true,
+                                })}
+                              </>
+                            ) : (
+                              <>
+                                <XCircle className="h-3 w-3 text-muted-foreground" />
+                                Not tested
+                              </>
+                            )}
+                          </div>
                         </div>
                       </div>
-                    </div>
 
-                    {/* Actions */}
-                    <div className="flex items-center gap-2 sm:shrink-0">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => handleTestConnection(server)}
-                        disabled={testingServerId === server.id}
-                      >
-                        {testingServerId === server.id ? (
-                          <Loader2 className="h-4 w-4 animate-spin" />
-                        ) : (
-                          <RefreshCw className="h-4 w-4" />
-                        )}
-                        <span className="ml-2 hidden sm:inline">Test</span>
-                      </Button>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => handleOpenDialog(server)}
-                      >
-                        <Pencil className="h-4 w-4" />
-                        <span className="ml-2 hidden sm:inline">Edit</span>
-                      </Button>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => setDeleteConfirmServer(server)}
-                        className="text-destructive hover:text-destructive"
-                      >
-                        <Trash2 className="h-4 w-4" />
-                        <span className="ml-2 hidden sm:inline">Delete</span>
-                      </Button>
+                      {/* Actions */}
+                      <div className="flex items-center gap-2 sm:shrink-0">
+                        <CollapsibleTrigger asChild>
+                          <Button variant="ghost" size="sm">
+                            <Activity className="h-4 w-4 mr-1" />
+                            <span className="hidden sm:inline">History</span>
+                            <ChevronDown className="h-3 w-3 ml-1 transition-transform group-data-[state=open]:rotate-180" />
+                          </Button>
+                        </CollapsibleTrigger>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => handleTestConnection(server)}
+                          disabled={testingServerId === server.id}
+                        >
+                          {testingServerId === server.id ? (
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                          ) : (
+                            <RefreshCw className="h-4 w-4" />
+                          )}
+                          <span className="ml-2 hidden sm:inline">Test</span>
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => handleOpenDialog(server)}
+                        >
+                          <Pencil className="h-4 w-4" />
+                          <span className="ml-2 hidden sm:inline">Edit</span>
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setDeleteConfirmServer(server)}
+                          className="text-destructive hover:text-destructive"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                          <span className="ml-2 hidden sm:inline">Delete</span>
+                        </Button>
+                      </div>
                     </div>
-                  </div>
-                </CardContent>
-              </Card>
+                    
+                    {/* Collapsible Connection History Chart */}
+                    <CollapsibleContent className="mt-4 pt-4 border-t">
+                      <ConnectionHistoryChart serverId={server.id} serverName={server.name} />
+                    </CollapsibleContent>
+                  </CardContent>
+                </Card>
+              </Collapsible>
             ))}
           </div>
         )}
