@@ -43,8 +43,10 @@ import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "@/hooks/use-toast";
-import { Users, Plus, Trash2, Server, Shield, ShieldCheck, ShieldOff } from "lucide-react";
-import type { UserProfile, UserRole, VMAssignment } from "@/lib/types";
+import { Users, Plus, Trash2, Server, Shield, ShieldCheck, ShieldOff, UserX } from "lucide-react";
+import type { UserProfile, VMAssignment } from "@/lib/types";
+
+const SUPABASE_URL = "https://lbfabewnshfjdjfosqxl.supabase.co";
 
 interface UserWithRole extends UserProfile {
   role: "admin" | "user";
@@ -65,6 +67,8 @@ export default function Admin() {
   });
   const [roleChangeUser, setRoleChangeUser] = useState<UserWithRole | null>(null);
   const [roleChangeLoading, setRoleChangeLoading] = useState(false);
+  const [deleteUser, setDeleteUser] = useState<UserWithRole | null>(null);
+  const [deleteLoading, setDeleteLoading] = useState(false);
 
   useEffect(() => {
     if (isAdmin) {
@@ -75,14 +79,8 @@ export default function Admin() {
   const fetchData = async () => {
     setLoading(true);
     try {
-      // Fetch profiles with roles
-      const { data: profiles } = await supabase
-        .from("profiles")
-        .select("*");
-
-      const { data: roles } = await supabase
-        .from("user_roles")
-        .select("*");
+      const { data: profiles } = await supabase.from("profiles").select("*");
+      const { data: roles } = await supabase.from("user_roles").select("*");
 
       const usersWithRoles: UserWithRole[] = (profiles || []).map((profile) => {
         const userRole = roles?.find((r) => r.user_id === profile.id);
@@ -94,7 +92,6 @@ export default function Admin() {
 
       setUsers(usersWithRoles);
 
-      // Fetch all VM assignments
       const { data: allAssignments } = await supabase
         .from("user_vm_assignments")
         .select("*");
@@ -216,6 +213,50 @@ export default function Admin() {
     }
   };
 
+  const handleDeleteUser = async () => {
+    if (!deleteUser) return;
+
+    setDeleteLoading(true);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) throw new Error("Not authenticated");
+
+      const response = await fetch(
+        `${SUPABASE_URL}/functions/v1/delete-user`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${session.access_token}`,
+          },
+          body: JSON.stringify({ userId: deleteUser.id }),
+        }
+      );
+
+      const result = await response.json();
+
+      if (!response.ok) {
+        throw new Error(result.error || "Failed to delete user");
+      }
+
+      toast({
+        title: "User deleted",
+        description: `${deleteUser.email} has been permanently deleted`,
+      });
+
+      setDeleteUser(null);
+      fetchData();
+    } catch (error) {
+      toast({
+        title: "Failed to delete user",
+        description: error instanceof Error ? error.message : "Unknown error",
+        variant: "destructive",
+      });
+    } finally {
+      setDeleteLoading(false);
+    }
+  };
+
   if (!isAdmin) {
     return (
       <DashboardLayout>
@@ -320,99 +361,108 @@ export default function Admin() {
                               </Button>
                             </DialogTrigger>
                             <DialogContent>
-                            <DialogHeader>
-                              <DialogTitle>Assign VM to User</DialogTitle>
-                              <DialogDescription>
-                                Assign a virtual machine to {user.email}
-                              </DialogDescription>
-                            </DialogHeader>
-                            <div className="space-y-4">
-                              <div className="space-y-2">
-                                <Label htmlFor="vmId">VM ID</Label>
-                                <Input
-                                  id="vmId"
-                                  type="number"
-                                  placeholder="e.g., 100"
-                                  value={newAssignment.vmId}
-                                  onChange={(e) =>
-                                    setNewAssignment((prev) => ({
-                                      ...prev,
-                                      vmId: e.target.value,
-                                    }))
-                                  }
-                                />
-                              </div>
-                              <div className="space-y-2">
-                                <Label htmlFor="nodeName">Node Name</Label>
-                                <Input
-                                  id="nodeName"
-                                  placeholder="e.g., pve1"
-                                  value={newAssignment.nodeName}
-                                  onChange={(e) =>
-                                    setNewAssignment((prev) => ({
-                                      ...prev,
-                                      nodeName: e.target.value,
-                                    }))
-                                  }
-                                />
-                              </div>
-                              <div className="space-y-2">
-                                <Label htmlFor="vmName">VM Name (optional)</Label>
-                                <Input
-                                  id="vmName"
-                                  placeholder="e.g., web-server"
-                                  value={newAssignment.vmName}
-                                  onChange={(e) =>
-                                    setNewAssignment((prev) => ({
-                                      ...prev,
-                                      vmName: e.target.value,
-                                    }))
-                                  }
-                                />
-                              </div>
-                              <div className="space-y-2">
-                                <Label>Permissions</Label>
-                                <div className="flex flex-wrap gap-4">
-                                  {["view", "console", "start", "stop", "restart"].map(
-                                    (perm) => (
-                                      <div
-                                        key={perm}
-                                        className="flex items-center space-x-2"
-                                      >
-                                        <Checkbox
-                                          id={perm}
-                                          checked={newAssignment.permissions.includes(
-                                            perm
-                                          )}
-                                          onCheckedChange={() =>
-                                            togglePermission(perm)
-                                          }
-                                        />
-                                        <Label htmlFor={perm} className="capitalize">
-                                          {perm}
-                                        </Label>
-                                      </div>
-                                    )
-                                  )}
+                              <DialogHeader>
+                                <DialogTitle>Assign VM to User</DialogTitle>
+                                <DialogDescription>
+                                  Assign a virtual machine to {user.email}
+                                </DialogDescription>
+                              </DialogHeader>
+                              <div className="space-y-4">
+                                <div className="space-y-2">
+                                  <Label htmlFor="vmId">VM ID</Label>
+                                  <Input
+                                    id="vmId"
+                                    type="number"
+                                    placeholder="e.g., 100"
+                                    value={newAssignment.vmId}
+                                    onChange={(e) =>
+                                      setNewAssignment((prev) => ({
+                                        ...prev,
+                                        vmId: e.target.value,
+                                      }))
+                                    }
+                                  />
+                                </div>
+                                <div className="space-y-2">
+                                  <Label htmlFor="nodeName">Node Name</Label>
+                                  <Input
+                                    id="nodeName"
+                                    placeholder="e.g., pve1"
+                                    value={newAssignment.nodeName}
+                                    onChange={(e) =>
+                                      setNewAssignment((prev) => ({
+                                        ...prev,
+                                        nodeName: e.target.value,
+                                      }))
+                                    }
+                                  />
+                                </div>
+                                <div className="space-y-2">
+                                  <Label htmlFor="vmName">VM Name (optional)</Label>
+                                  <Input
+                                    id="vmName"
+                                    placeholder="e.g., web-server"
+                                    value={newAssignment.vmName}
+                                    onChange={(e) =>
+                                      setNewAssignment((prev) => ({
+                                        ...prev,
+                                        vmName: e.target.value,
+                                      }))
+                                    }
+                                  />
+                                </div>
+                                <div className="space-y-2">
+                                  <Label>Permissions</Label>
+                                  <div className="flex flex-wrap gap-4">
+                                    {["view", "console", "start", "stop", "restart"].map(
+                                      (perm) => (
+                                        <div
+                                          key={perm}
+                                          className="flex items-center space-x-2"
+                                        >
+                                          <Checkbox
+                                            id={perm}
+                                            checked={newAssignment.permissions.includes(
+                                              perm
+                                            )}
+                                            onCheckedChange={() =>
+                                              togglePermission(perm)
+                                            }
+                                          />
+                                          <Label htmlFor={perm} className="capitalize">
+                                            {perm}
+                                          </Label>
+                                        </div>
+                                      )
+                                    )}
+                                  </div>
                                 </div>
                               </div>
-                            </div>
-                            <DialogFooter>
-                              <Button
-                                variant="outline"
-                                onClick={() => {
-                                  setShowAssignDialog(false);
-                                  setSelectedUser(null);
-                                }}
-                              >
-                                Cancel
-                              </Button>
-                              <Button onClick={handleAddAssignment}>
-                                Assign VM
-                              </Button>
-                            </DialogFooter>
-                          </DialogContent>
+                              <DialogFooter>
+                                <Button
+                                  variant="outline"
+                                  onClick={() => {
+                                    setShowAssignDialog(false);
+                                    setSelectedUser(null);
+                                  }}
+                                >
+                                  Cancel
+                                </Button>
+                                <Button onClick={handleAddAssignment}>
+                                  Assign VM
+                                </Button>
+                              </DialogFooter>
+                            </DialogContent>
                           </Dialog>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="text-destructive hover:text-destructive hover:bg-destructive/10"
+                            onClick={() => setDeleteUser(user)}
+                          >
+                            <UserX className="h-4 w-4 mr-1" />
+                            Delete
+                          </Button>
                         </div>
                       </TableCell>
                     </TableRow>
@@ -523,6 +573,38 @@ export default function Admin() {
                 className={roleChangeUser?.role === "admin" ? "bg-destructive hover:bg-destructive/90" : ""}
               >
                 {roleChangeLoading ? "Updating..." : roleChangeUser?.role === "admin" ? "Demote" : "Promote"}
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+
+        {/* Delete User Confirmation Dialog */}
+        <AlertDialog open={!!deleteUser} onOpenChange={(open) => !open && setDeleteUser(null)}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle className="text-destructive">Delete User Account</AlertDialogTitle>
+              <AlertDialogDescription className="space-y-2">
+                <p>
+                  Are you sure you want to permanently delete <strong>{deleteUser?.email}</strong>?
+                </p>
+                <p className="font-medium">This action will:</p>
+                <ul className="list-disc list-inside text-sm space-y-1">
+                  <li>Remove all VM assignments for this user</li>
+                  <li>Delete all connection session history</li>
+                  <li>Remove their user role and profile</li>
+                  <li>Permanently delete their authentication account</li>
+                </ul>
+                <p className="text-destructive font-medium">This action cannot be undone.</p>
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel disabled={deleteLoading}>Cancel</AlertDialogCancel>
+              <AlertDialogAction
+                onClick={handleDeleteUser}
+                disabled={deleteLoading}
+                className="bg-destructive hover:bg-destructive/90"
+              >
+                {deleteLoading ? "Deleting..." : "Delete User"}
               </AlertDialogAction>
             </AlertDialogFooter>
           </AlertDialogContent>
