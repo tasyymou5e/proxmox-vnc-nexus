@@ -80,11 +80,14 @@ export type Database = {
       proxmox_servers: {
         Row: {
           api_token_encrypted: string
+          connection_status: string | null
           created_at: string | null
+          health_check_error: string | null
           host: string
           id: string
           is_active: boolean | null
           last_connected_at: string | null
+          last_health_check_at: string | null
           name: string
           port: number
           updated_at: string | null
@@ -93,11 +96,14 @@ export type Database = {
         }
         Insert: {
           api_token_encrypted: string
+          connection_status?: string | null
           created_at?: string | null
+          health_check_error?: string | null
           host: string
           id?: string
           is_active?: boolean | null
           last_connected_at?: string | null
+          last_health_check_at?: string | null
           name: string
           port?: number
           updated_at?: string | null
@@ -106,11 +112,14 @@ export type Database = {
         }
         Update: {
           api_token_encrypted?: string
+          connection_status?: string | null
           created_at?: string | null
+          health_check_error?: string | null
           host?: string
           id?: string
           is_active?: boolean | null
           last_connected_at?: string | null
+          last_health_check_at?: string | null
           name?: string
           port?: number
           updated_at?: string | null

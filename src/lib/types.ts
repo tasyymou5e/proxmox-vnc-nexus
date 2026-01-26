@@ -13,6 +13,8 @@ export interface VM {
   uptime?: number;
   template?: boolean;
   permissions?: string[];
+  serverId?: string;
+  serverName?: string;
 }
 
 export interface VNCConnection {
@@ -68,6 +70,8 @@ export interface ConnectionSession {
   status: string;
 }
 
+export type ConnectionStatus = 'online' | 'offline' | 'unknown' | 'checking';
+
 export interface ProxmoxServer {
   id: string;
   user_id: string;
@@ -79,6 +83,9 @@ export interface ProxmoxServer {
   last_connected_at: string | null;
   created_at: string;
   updated_at: string;
+  connection_status: ConnectionStatus;
+  last_health_check_at: string | null;
+  health_check_error: string | null;
 }
 
 export interface ProxmoxServerInput {
@@ -87,4 +94,24 @@ export interface ProxmoxServerInput {
   port: number;
   api_token: string;
   verify_ssl?: boolean;
+}
+
+export interface HealthCheckResult {
+  serverId: string;
+  serverName: string;
+  status: 'online' | 'offline';
+  error?: string;
+  nodes?: number;
+}
+
+export interface ImportError {
+  index: number;
+  name: string;
+  error: string;
+}
+
+export interface BulkImportResult {
+  success: number;
+  failed: ImportError[];
+  message: string;
 }

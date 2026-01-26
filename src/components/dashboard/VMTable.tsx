@@ -74,6 +74,7 @@ export function VMTable({ vms }: VMTableProps) {
           <TableRow>
             <TableHead className="w-[60px]">ID</TableHead>
             <TableHead>Name</TableHead>
+            <TableHead>Server</TableHead>
             <TableHead>Node</TableHead>
             <TableHead>Type</TableHead>
             <TableHead>Status</TableHead>
@@ -89,12 +90,13 @@ export function VMTable({ vms }: VMTableProps) {
             const canStop = vm.status === "running";
             const canConsole = vm.status === "running" && vm.permissions?.includes("console");
 
-            return (
-              <TableRow key={`${vm.node}-${vm.vmid}`}>
-                <TableCell className="font-mono text-sm">{vm.vmid}</TableCell>
-                <TableCell className="font-medium">{vm.name || "-"}</TableCell>
-                <TableCell>{vm.node}</TableCell>
-                <TableCell className="uppercase text-xs">{vm.type}</TableCell>
+              return (
+                <TableRow key={`${vm.serverId || 'default'}-${vm.node}-${vm.vmid}`}>
+                  <TableCell className="font-mono text-sm">{vm.vmid}</TableCell>
+                  <TableCell className="font-medium">{vm.name || "-"}</TableCell>
+                  <TableCell className="text-muted-foreground">{vm.serverName || "-"}</TableCell>
+                  <TableCell>{vm.node}</TableCell>
+                  <TableCell className="uppercase text-xs">{vm.type}</TableCell>
                 <TableCell>
                   <VMStatusBadge status={vm.status} />
                 </TableCell>

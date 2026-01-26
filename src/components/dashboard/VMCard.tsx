@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { VMStatusBadge } from "./VMStatusBadge";
 import { ResourceMeter } from "./ResourceMeter";
@@ -14,9 +15,6 @@ import {
   Square, 
   RotateCcw, 
   MoreVertical, 
-  Cpu, 
-  HardDrive, 
-  MemoryStick,
   Loader2,
   Server
 } from "lucide-react";
@@ -77,6 +75,11 @@ export function VMCard({ vm }: VMCardProps) {
               <p className="text-xs text-muted-foreground">
                 {vm.type.toUpperCase()} • Node: {vm.node} • ID: {vm.vmid}
               </p>
+              {vm.serverName && (
+                <Badge variant="secondary" className="text-xs mt-1">
+                  {vm.serverName}
+                </Badge>
+              )}
             </div>
           </div>
           <VMStatusBadge status={vm.status} />

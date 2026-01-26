@@ -53,7 +53,11 @@ async function handleResponse<T>(response: Response): Promise<T> {
   return response.json();
 }
 
-export async function listVMs(): Promise<{ vms: VM[]; isAdmin: boolean }> {
+export async function listVMs(serverId?: string): Promise<{ 
+  vms: VM[]; 
+  isAdmin: boolean;
+  servers: { id: string; name: string }[];
+}> {
   const headers = await getAuthHeaders();
 
   const response = await fetch(
@@ -61,7 +65,7 @@ export async function listVMs(): Promise<{ vms: VM[]; isAdmin: boolean }> {
     {
       method: "POST",
       headers,
-      body: JSON.stringify({}),
+      body: JSON.stringify({ serverId }),
     }
   );
 
