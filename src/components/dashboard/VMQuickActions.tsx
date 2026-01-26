@@ -21,9 +21,10 @@ interface VMQuickActionsProps {
   onAction: (action: "start" | "stop" | "reset") => Promise<void>;
   isPerformingAction: boolean;
   canManage: boolean;
+  onClick?: () => void;
 }
 
-export function VMQuickActions({ vm, onAction, isPerformingAction, canManage }: VMQuickActionsProps) {
+export function VMQuickActions({ vm, onAction, isPerformingAction, canManage, onClick }: VMQuickActionsProps) {
   const navigate = useNavigate();
   const [confirmAction, setConfirmAction] = useState<"stop" | "reset" | null>(null);
   const [isExecuting, setIsExecuting] = useState(false);
@@ -70,7 +71,14 @@ export function VMQuickActions({ vm, onAction, isPerformingAction, canManage }: 
 
   return (
     <>
-      <div className="flex items-center justify-between p-3 rounded-lg border bg-card hover:bg-accent/50 transition-colors">
+      <div 
+        className="flex items-center justify-between p-3 rounded-lg border bg-card hover:bg-accent/50 transition-colors cursor-pointer"
+        onClick={(e) => {
+          // Only trigger onClick if the click wasn't on a button
+          if ((e.target as HTMLElement).closest('button')) return;
+          onClick?.();
+        }}
+      >
         <div className="flex items-center gap-3">
           <Monitor className="h-4 w-4 text-muted-foreground" />
           <div>
