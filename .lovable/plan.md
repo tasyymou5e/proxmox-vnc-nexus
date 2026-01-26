@@ -1,85 +1,66 @@
 
+# Fix HTTP 412 Infrastructure Error - Trigger Rebuild
 
-# Make Documentation Internal (Protected)
+## Problem
+The site is stuck on a loading state because the Lovable preview server is returning HTTP 412 (Precondition Failed) errors for all application resources. This is a server-side caching/deployment issue, not a code defect.
 
-## Overview
-Move the documentation from being publicly accessible to being a protected route that requires authentication. The docs link will be added to the dashboard navigation sidebar and removed from the public landing page.
+## Evidence from Investigation
+| Check | Result |
+|-------|--------|
+| Browser screenshot | "This page isn't working - HTTP ERROR 412" |
+| Network request status | ERR_HTTP_RESPONSE_CODE_FAILURE |
+| Login.tsx | Correctly structured, no errors |
+| AuthProvider.tsx | Properly exports context and hooks |
+| App.tsx | Routes correctly configured |
+| Supabase client | Properly initialized |
+| useRealtimeNotifications.ts | Clean code, no syntax errors |
 
-## Current State
-- Documentation is publicly accessible at `/docs` without authentication
-- A link to docs exists on the Index page (landing/loading page)
-- The route in `App.tsx` is not wrapped with `ProtectedRoute`
+## Verified Code Files
+All recently modified files have been checked and are syntactically correct:
+- `src/pages/Login.tsx` - Simple component toggling between LoginForm/SignupForm
+- `src/components/auth/LoginForm.tsx` - Full login form with proper imports
+- `src/components/auth/AuthProvider.tsx` - Context provider with session management
+- `src/hooks/useRealtimeNotifications.ts` - Realtime subscription hook
+- `src/pages/NotificationsCenter.tsx` - Notifications timeline view
+- `src/components/layout/TenantLayout.tsx` - Sidebar with Documentation link
+- `src/components/layout/DashboardLayout.tsx` - Sidebar with Documentation link
 
-## Changes Required
+## Solution
+Trigger a fresh build by making a minimal, non-functional change to a core file. This will force the preview server to:
+1. Invalidate its asset cache
+2. Rebuild the application from source
+3. Serve fresh resources with correct ETags
 
-### 1. Protect the Docs Route
-**File:** `src/App.tsx`
+## Implementation
 
-Wrap the `/docs` route with `ProtectedRoute` so only authenticated users can access it:
+### File: src/main.tsx
+Add a timestamp comment to force a rebuild:
+
 ```tsx
-// Change from:
-<Route path="/docs" element={<Suspense fallback={<PageLoader />}><Docs /></Suspense>} />
+import { createRoot } from 'react-dom/client'
+import App from './App.tsx'
+import './index.css'
 
-// Change to:
-<Route path="/docs" element={
-  <ProtectedRoute>
-    <Suspense fallback={<PageLoader />}><Docs /></Suspense>
-  </ProtectedRoute>
-} />
+// Proxmox VNC Nexus - Connection Broker Application
+// Build trigger: 2026-01-26T23:00
+createRoot(document.getElementById("root")!).render(<App />);
 ```
 
-### 2. Remove Public Docs Link
-**File:** `src/pages/Index.tsx`
+## Why This Works
+The HTTP 412 error occurs when the server's cached assets don't match what the client expects (based on conditional headers like If-Match or If-None-Match). By changing any source file:
+- Vite generates new hashed asset filenames
+- The preview server creates new cache entries
+- All clients receive fresh resources without precondition conflicts
 
-Remove the documentation link from the Index page since it will no longer be publicly accessible:
-- Remove the `BookOpen` icon import
-- Remove the `Button` component linking to `/docs`
+## Technical Details
+- No functional code changes required
+- Only adds a comment with a timestamp
+- Forces complete rebuild of all assets
+- Takes 30-60 seconds to deploy
 
-### 3. Add Docs to Dashboard Navigation
-**File:** `src/components/layout/DashboardLayout.tsx`
-
-Add a "Documentation" item to the sidebar navigation:
-- Import `BookOpen` icon from lucide-react
-- Add new nav item: `{ label: "Documentation", href: "/docs", icon: BookOpen }`
-- Position it after Settings for easy access
-
-### 4. Add Docs to Tenant Layout Navigation
-**File:** `src/components/layout/TenantLayout.tsx`
-
-Add a "Documentation" item to the tenant sidebar navigation:
-- Import `BookOpen` icon (add to existing imports)
-- Add new nav item: `{ label: "Documentation", href: "/docs", icon: BookOpen }`
-- Position it at the bottom of the navigation list
-
-## User Flow After Changes
-
-```text
-User visits site
-        |
-        v
-  Authenticated? ----No----> Login Page
-        |
-       Yes
-        |
-        v
-    Dashboard
-        |
-        v
-  Sidebar contains "Documentation" link
-        |
-        v
-  Click Documentation
-        |
-        v
-  View protected docs at /docs
-```
-
-## Files to Modify
-
-| File | Change |
-|------|--------|
-| `src/App.tsx` | Wrap `/docs` route with `ProtectedRoute` |
-| `src/pages/Index.tsx` | Remove public docs link |
-| `src/components/layout/DashboardLayout.tsx` | Add Documentation nav item |
-| `src/components/layout/TenantLayout.tsx` | Add Documentation nav item |
-
+## Expected Outcome
+After the rebuild completes:
+1. Preview URL will load the Index page
+2. User will be redirected to /login
+3. Login form will render correctly
+4. Both preview and published sites will work
