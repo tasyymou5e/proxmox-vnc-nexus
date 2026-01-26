@@ -1,582 +1,693 @@
 
-# Tenant Logo Storage, Exponential Backoff Retry, and VM Quick Actions
+# Connection History Chart, Real-Time Updates, and VM Console Button
 
 ## Overview
 
-This plan implements three features:
+This plan implements three interconnected features to enhance server monitoring and VM management:
 
-1. **Tenant Logo Storage Bucket** - Create Supabase storage bucket for tenant logos with upload functionality
-2. **Exponential Backoff Retry Logic** - Add retry mechanism to proxmox-servers edge function for Tailscale connections
-3. **VM Quick Actions on Dashboard** - Add inline power controls with role-based visibility for managers
+1. **Connection History Chart** - Visualize success rates and response times from `connection_metrics` table over the last 24 hours
+2. **Real-Time Connection Status Updates** - Use Supabase Realtime subscriptions for live server health changes
+3. **VM Console Connection Button** - Add console access directly from VMQuickActions on the dashboard
 
 ---
 
-## Part 1: Tenant Logo Storage and Upload
+## Part 1: Connection History Chart
 
-### 1.1 Create Storage Bucket (SQL Migration)
+### 1.1 Update connection-metrics Edge Function
 
-Create a public bucket for tenant logos with appropriate RLS policies:
+**File: `supabase/functions/connection-metrics/index.ts`** (Update)
 
-```sql
--- Create the tenant-logos bucket
-INSERT INTO storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
-VALUES (
-  'tenant-logos',
-  'tenant-logos',
-  true,  -- Public bucket for logo display
-  2097152,  -- 2MB limit
-  ARRAY['image/jpeg', 'image/png', 'image/webp', 'image/svg+xml']
-);
-
--- RLS Policy: Users can view logos for their tenants
-CREATE POLICY "Users can view tenant logos"
-ON storage.objects FOR SELECT
-USING (
-  bucket_id = 'tenant-logos' AND
-  (
-    auth.uid() IS NOT NULL AND
-    (
-      public.has_role(auth.uid(), 'admin'::app_role) OR
-      public.user_has_tenant_access(auth.uid(), (storage.foldername(name))[1]::uuid)
-    )
-  )
-);
-
--- RLS Policy: Tenant admins can upload logos
-CREATE POLICY "Tenant admins can upload logos"
-ON storage.objects FOR INSERT
-WITH CHECK (
-  bucket_id = 'tenant-logos' AND
-  auth.uid() IS NOT NULL AND
-  (
-    public.has_role(auth.uid(), 'admin'::app_role) OR
-    public.has_tenant_role(auth.uid(), (storage.foldername(name))[1]::uuid, ARRAY['admin']::tenant_role[])
-  )
-);
-
--- RLS Policy: Tenant admins can update logos
-CREATE POLICY "Tenant admins can update logos"
-ON storage.objects FOR UPDATE
-USING (
-  bucket_id = 'tenant-logos' AND
-  auth.uid() IS NOT NULL AND
-  (
-    public.has_role(auth.uid(), 'admin'::app_role) OR
-    public.has_tenant_role(auth.uid(), (storage.foldername(name))[1]::uuid, ARRAY['admin']::tenant_role[])
-  )
-);
-
--- RLS Policy: Tenant admins can delete logos
-CREATE POLICY "Tenant admins can delete logos"
-ON storage.objects FOR DELETE
-USING (
-  bucket_id = 'tenant-logos' AND
-  auth.uid() IS NOT NULL AND
-  (
-    public.has_role(auth.uid(), 'admin'::app_role) OR
-    public.has_tenant_role(auth.uid(), (storage.foldername(name))[1]::uuid, ARRAY['admin']::tenant_role[])
-  )
-);
-```
-
-### 1.2 Create Logo Upload Hook
-
-**File: `src/hooks/useLogoUpload.ts`** (New)
+Add a new action `get-history` to fetch time-series data:
 
 ```typescript
-import { supabase } from "@/integrations/supabase/client";
-import { toast } from "@/hooks/use-toast";
-
-export function useLogoUpload(tenantId: string | undefined) {
-  const uploadLogo = async (file: File): Promise<string | null> => {
-    if (!tenantId) throw new Error("Tenant ID required");
-    
-    // Validate file type
-    const allowedTypes = ['image/jpeg', 'image/png', 'image/webp', 'image/svg+xml'];
-    if (!allowedTypes.includes(file.type)) {
-      throw new Error("Invalid file type. Allowed: JPEG, PNG, WebP, SVG");
-    }
-    
-    // Validate file size (2MB max)
-    if (file.size > 2 * 1024 * 1024) {
-      throw new Error("File too large. Maximum size: 2MB");
-    }
-
-    const fileExt = file.name.split('.').pop();
-    const fileName = `${tenantId}/logo.${fileExt}`;
-    
-    const { data, error } = await supabase.storage
-      .from('tenant-logos')
-      .upload(fileName, file, { 
-        upsert: true,
-        contentType: file.type 
-      });
-    
-    if (error) throw error;
-    
-    // Get public URL
-    const { data: { publicUrl } } = supabase.storage
-      .from('tenant-logos')
-      .getPublicUrl(data.path);
-    
-    return publicUrl;
-  };
-
-  const deleteLogo = async () => {
-    if (!tenantId) throw new Error("Tenant ID required");
-    
-    // List files in tenant folder
-    const { data: files } = await supabase.storage
-      .from('tenant-logos')
-      .list(tenantId);
-    
-    if (files?.length) {
-      await supabase.storage
-        .from('tenant-logos')
-        .remove(files.map(f => `${tenantId}/${f.name}`));
-    }
-  };
-
-  return { uploadLogo, deleteLogo };
-}
-```
-
-### 1.3 Update TenantSettings Page with Logo Upload
-
-**File: `src/pages/TenantSettings.tsx`** (Update)
-
-Add file upload UI to replace the URL input:
-
-```text
-Logo Upload Section:
-+--------------------------------------------------+
-|  Logo                                             |
-|  +-------------+  +--------------------------+   |
-|  | [Preview]   |  | Drag & drop or click    |   |
-|  | Current     |  | to upload logo           |   |
-|  | Logo        |  |                          |   |
-|  +-------------+  | Formats: JPEG, PNG, WebP |   |
-|                   | Max size: 2MB            |   |
-|                   +--------------------------+   |
-|                   [Remove Logo]                  |
-+--------------------------------------------------+
-```
-
-Changes to implement:
-- Import `useLogoUpload` hook
-- Add file input with drag-and-drop support
-- Show current logo preview if exists
-- Handle upload progress and errors
-- Update `logo_url` in settings after successful upload
-- Add "Remove Logo" button functionality
-
-```tsx
-// New state for upload
-const [isUploading, setIsUploading] = useState(false);
-const fileInputRef = useRef<HTMLInputElement>(null);
-
-// Handle file selection
-const handleFileSelect = async (file: File) => {
-  setIsUploading(true);
-  try {
-    const url = await uploadLogo(file);
-    if (url) {
-      handleChange("logo_url", url);
-      toast({ title: "Logo uploaded", description: "Your logo has been updated." });
-    }
-  } catch (error) {
-    toast({ title: "Upload failed", description: error.message, variant: "destructive" });
-  } finally {
-    setIsUploading(false);
+case 'get-history': {
+  if (!serverId) {
+    return new Response(
+      JSON.stringify({ error: "Server ID required" }),
+      { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+    );
   }
-};
-```
 
----
+  // Get metrics from last 24 hours
+  const twentyFourHoursAgo = new Date();
+  twentyFourHoursAgo.setHours(twentyFourHoursAgo.getHours() - 24);
 
-## Part 2: Exponential Backoff Retry Logic
+  const { data: metrics, error } = await supabase
+    .from("connection_metrics")
+    .select("success, response_time_ms, created_at, used_tailscale, error_message")
+    .eq("server_id", serverId)
+    .gte("created_at", twentyFourHoursAgo.toISOString())
+    .order("created_at", { ascending: true });
 
-### 2.1 Add fetchWithRetry Helper to proxmox-servers
+  if (error) throw error;
 
-**File: `supabase/functions/proxmox-servers/index.ts`** (Update)
+  // Group by hour for chart display
+  const hourlyData = groupByHour(metrics || []);
 
-Add at the top of the file after the encryption functions:
-
-```typescript
-// Retry configuration
-interface RetryConfig {
-  maxRetries: number;
-  baseDelayMs: number;
-  maxDelayMs: number;
+  return new Response(
+    JSON.stringify({
+      history: {
+        raw: metrics,
+        hourly: hourlyData,
+        summary: {
+          totalAttempts: metrics?.length || 0,
+          successCount: (metrics || []).filter(m => m.success).length,
+          avgResponseTime: calculateAvg((metrics || []).filter(m => m.success && m.response_time_ms).map(m => m.response_time_ms!)),
+        }
+      }
+    }),
+    { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+  );
 }
 
-interface FetchWithRetryResult {
-  response: Response | null;
-  error: Error | null;
-  attempts: number;
-  totalTimeMs: number;
-}
-
-async function fetchWithRetry(
-  url: string,
-  options: RequestInit,
-  config: RetryConfig = { maxRetries: 3, baseDelayMs: 1000, maxDelayMs: 8000 }
-): Promise<FetchWithRetryResult> {
-  const startTime = Date.now();
-  let lastError: Error | null = null;
+function groupByHour(metrics: any[]) {
+  const hourlyMap = new Map<string, { success: number; failed: number; avgResponseTime: number; responseTimes: number[] }>();
   
-  for (let attempt = 0; attempt <= config.maxRetries; attempt++) {
-    try {
-      const response = await fetch(url, options);
-      
-      // Success - return immediately
-      return {
-        response,
-        error: null,
-        attempts: attempt + 1,
-        totalTimeMs: Date.now() - startTime,
-      };
-    } catch (error) {
-      lastError = error as Error;
-      
-      // Don't retry on timeout errors (AbortError) - they already waited
-      if (error.name === 'TimeoutError' || error.name === 'AbortError') {
-        break;
-      }
-      
-      // If more retries available, wait with exponential backoff
-      if (attempt < config.maxRetries) {
-        // Exponential backoff: 1s, 2s, 4s, 8s (capped at maxDelayMs)
-        const delay = Math.min(
-          config.baseDelayMs * Math.pow(2, attempt),
-          config.maxDelayMs
-        );
-        // Add jitter (0-20% of delay)
-        const jitter = delay * 0.2 * Math.random();
-        
-        console.log(`Retry ${attempt + 1}/${config.maxRetries} after ${delay + jitter}ms`);
-        await new Promise(r => setTimeout(r, delay + jitter));
-      }
+  metrics.forEach(m => {
+    const hour = new Date(m.created_at).toISOString().slice(0, 13) + ":00:00Z";
+    if (!hourlyMap.has(hour)) {
+      hourlyMap.set(hour, { success: 0, failed: 0, avgResponseTime: 0, responseTimes: [] });
     }
-  }
-  
-  return {
-    response: null,
-    error: lastError,
-    attempts: config.maxRetries + 1,
-    totalTimeMs: Date.now() - startTime,
-  };
-}
-```
-
-### 2.2 Update Health Check to Use Retry Logic
-
-Replace the direct fetch calls in health-check-all action:
-
-```typescript
-// In health-check-all action, replace:
-// const testResponse = await fetch(testUrl, { ... });
-
-// With:
-const useTailscale = server.use_tailscale && !!server.tailscale_hostname;
-const retryConfig: RetryConfig = useTailscale 
-  ? { maxRetries: 3, baseDelayMs: 1000, maxDelayMs: 8000 }  // More retries for Tailscale
-  : { maxRetries: 1, baseDelayMs: 500, maxDelayMs: 2000 };  // Fewer retries for direct
-
-const { response: testResponse, error: fetchError, attempts } = await fetchWithRetry(
-  testUrl,
-  {
-    headers: { "Authorization": `PVEAPIToken=${decryptedToken}` },
-    signal: AbortSignal.timeout(timeout),
-  },
-  retryConfig
-);
-
-// Log retry info if multiple attempts
-if (attempts > 1) {
-  console.log(`Server ${server.name}: Succeeded after ${attempts} attempts`);
-}
-
-if (fetchError) {
-  result.error = `${fetchError.message} (after ${attempts} attempts)`;
-  // ... update database status
-}
-```
-
-### 2.3 Update Test Connection Endpoint
-
-Similar update to the test action:
-
-```typescript
-// In test action, use fetchWithRetry:
-const { response: testResponse, error: fetchError, attempts } = await fetchWithRetry(
-  testUrl,
-  {
-    headers: { "Authorization": `PVEAPIToken=${tokenToUse}` },
-    signal: AbortSignal.timeout(timeout),
-  },
-  useTailscale 
-    ? { maxRetries: 3, baseDelayMs: 1000, maxDelayMs: 8000 }
-    : { maxRetries: 1, baseDelayMs: 500, maxDelayMs: 2000 }
-);
-
-// Return retry info in response
-return new Response(
-  JSON.stringify({ 
-    success: true, 
-    message: `Connection successful${attempts > 1 ? ` (${attempts} attempts)` : ''}`,
-    nodes: testData.data?.length || 0,
-    retryAttempts: attempts,
-  }),
-  { headers: { ...corsHeaders, "Content-Type": "application/json" } }
-);
-```
-
----
-
-## Part 3: VM Quick Actions on Tenant Dashboard
-
-### 3.1 Create VMQuickActions Component
-
-**File: `src/components/dashboard/VMQuickActions.tsx`** (New)
-
-```tsx
-import { useState } from "react";
-import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import { Play, Square, RotateCcw, Loader2, Monitor, Link2 } from "lucide-react";
-import type { VM } from "@/lib/types";
-
-interface VMQuickActionsProps {
-  vm: VM;
-  onAction: (action: "start" | "stop" | "reset") => Promise<void>;
-  isPerformingAction: boolean;
-  canManage: boolean;
-}
-
-export function VMQuickActions({ vm, onAction, isPerformingAction, canManage }: VMQuickActionsProps) {
-  const [confirmAction, setConfirmAction] = useState<"stop" | "reset" | null>(null);
-  
-  const isRunning = vm.status === "running";
-  const isStopped = vm.status === "stopped";
-  
-  const handleAction = async (action: "start" | "stop" | "reset") => {
-    if (action === "stop" || action === "reset") {
-      setConfirmAction(action);
+    const data = hourlyMap.get(hour)!;
+    if (m.success) {
+      data.success++;
+      if (m.response_time_ms) data.responseTimes.push(m.response_time_ms);
     } else {
-      await onAction(action);
+      data.failed++;
     }
+  });
+
+  // Calculate averages and format for chart
+  return Array.from(hourlyMap.entries()).map(([hour, data]) => ({
+    time: hour,
+    successRate: data.success + data.failed > 0 
+      ? Math.round((data.success / (data.success + data.failed)) * 100) 
+      : 100,
+    avgResponseTime: data.responseTimes.length > 0
+      ? Math.round(data.responseTimes.reduce((a, b) => a + b, 0) / data.responseTimes.length)
+      : null,
+    attempts: data.success + data.failed,
+  }));
+}
+```
+
+### 1.2 Create useConnectionHistory Hook
+
+**File: `src/hooks/useConnectionHistory.ts`** (New)
+
+```typescript
+import { useQuery } from "@tanstack/react-query";
+import { supabase } from "@/integrations/supabase/client";
+
+export interface HourlyMetric {
+  time: string;
+  successRate: number;
+  avgResponseTime: number | null;
+  attempts: number;
+}
+
+export interface ConnectionHistory {
+  hourly: HourlyMetric[];
+  summary: {
+    totalAttempts: number;
+    successCount: number;
+    avgResponseTime: number | null;
+  };
+}
+
+export function useConnectionHistory(serverId: string | undefined) {
+  return useQuery({
+    queryKey: ["connection-history", serverId],
+    queryFn: async (): Promise<ConnectionHistory> => {
+      if (!serverId) throw new Error("Server ID required");
+
+      const { data, error } = await supabase.functions.invoke("connection-metrics", {
+        body: { action: "get-history", serverId },
+      });
+
+      if (error) throw error;
+      return data.history;
+    },
+    enabled: !!serverId,
+    refetchInterval: 60000, // Refresh every minute
+  });
+}
+```
+
+### 1.3 Create ConnectionHistoryChart Component
+
+**File: `src/components/servers/ConnectionHistoryChart.tsx`** (New)
+
+Using the existing `recharts` library already installed in the project:
+
+```typescript
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, Area, ComposedChart } from "recharts";
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Badge } from "@/components/ui/badge";
+import { useConnectionHistory } from "@/hooks/useConnectionHistory";
+import { format } from "date-fns";
+import { TrendingUp, TrendingDown, Activity, Clock } from "lucide-react";
+
+interface ConnectionHistoryChartProps {
+  serverId: string;
+  serverName?: string;
+}
+
+export function ConnectionHistoryChart({ serverId, serverName }: ConnectionHistoryChartProps) {
+  const { data, isLoading, error } = useConnectionHistory(serverId);
+
+  // Format time for x-axis
+  const formatXAxis = (time: string) => {
+    return format(new Date(time), "HH:mm");
   };
 
-  const confirmAndExecute = async () => {
-    if (confirmAction) {
-      await onAction(confirmAction);
-      setConfirmAction(null);
+  // Custom tooltip
+  const CustomTooltip = ({ active, payload, label }: any) => {
+    if (active && payload && payload.length) {
+      return (
+        <div className="bg-popover border rounded-lg shadow-lg p-3 text-sm">
+          <p className="font-medium">{format(new Date(label), "MMM d, HH:mm")}</p>
+          <p className="text-green-600">Success Rate: {payload[0]?.value}%</p>
+          <p className="text-blue-600">Avg Response: {payload[1]?.value ?? "N/A"}ms</p>
+          <p className="text-muted-foreground">Attempts: {payload[0]?.payload.attempts}</p>
+        </div>
+      );
     }
+    return null;
   };
+
+  if (isLoading) {
+    return (
+      <Card>
+        <CardHeader>
+          <Skeleton className="h-6 w-48" />
+          <Skeleton className="h-4 w-32 mt-1" />
+        </CardHeader>
+        <CardContent>
+          <Skeleton className="h-64 w-full" />
+        </CardContent>
+      </Card>
+    );
+  }
+
+  if (error || !data) {
+    return (
+      <Card className="border-dashed">
+        <CardContent className="flex items-center justify-center py-12 text-muted-foreground">
+          No connection history available
+        </CardContent>
+      </Card>
+    );
+  }
+
+  const successRate = data.summary.totalAttempts > 0 
+    ? Math.round((data.summary.successCount / data.summary.totalAttempts) * 100) 
+    : 100;
 
   return (
-    <>
-      <div className="flex items-center justify-between p-3 rounded-lg border bg-card hover:bg-accent/50 transition-colors">
-        <div className="flex items-center gap-3">
-          <Monitor className="h-4 w-4 text-muted-foreground" />
+    <Card>
+      <CardHeader>
+        <div className="flex items-center justify-between">
           <div>
-            <div className="flex items-center gap-2">
-              <span className="font-medium">{vm.name || `VM ${vm.vmid}`}</span>
-              <Badge variant={isRunning ? "default" : "secondary"} className="text-xs">
-                {vm.status}
-              </Badge>
-              {vm.useTailscale && (
-                <TooltipProvider>
-                  <Tooltip>
-                    <TooltipTrigger>
-                      <Link2 className="h-3 w-3 text-blue-500" />
-                    </TooltipTrigger>
-                    <TooltipContent>Tailscale: {vm.tailscaleHostname}</TooltipContent>
-                  </Tooltip>
-                </TooltipProvider>
-              )}
+            <CardTitle className="flex items-center gap-2">
+              <Activity className="h-5 w-5" />
+              Connection History
+            </CardTitle>
+            <CardDescription>Last 24 hours • {serverName}</CardDescription>
+          </div>
+          <div className="flex gap-3">
+            <div className="text-right">
+              <div className="flex items-center gap-1">
+                {successRate >= 95 ? (
+                  <TrendingUp className="h-4 w-4 text-green-500" />
+                ) : successRate >= 80 ? (
+                  <Activity className="h-4 w-4 text-orange-500" />
+                ) : (
+                  <TrendingDown className="h-4 w-4 text-red-500" />
+                )}
+                <span className="font-bold text-lg">{successRate}%</span>
+              </div>
+              <span className="text-xs text-muted-foreground">Success Rate</span>
             </div>
-            <p className="text-xs text-muted-foreground">
-              {vm.node} • {vm.type.toUpperCase()} • ID: {vm.vmid}
-            </p>
+            <div className="text-right">
+              <div className="flex items-center gap-1">
+                <Clock className="h-4 w-4 text-blue-500" />
+                <span className="font-bold text-lg">
+                  {data.summary.avgResponseTime ?? "N/A"}
+                  {data.summary.avgResponseTime && <span className="text-sm font-normal">ms</span>}
+                </span>
+              </div>
+              <span className="text-xs text-muted-foreground">Avg Response</span>
+            </div>
           </div>
         </div>
-        
-        {canManage && (
-          <div className="flex items-center gap-1">
-            {isStopped ? (
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => handleAction("start")}
-                disabled={isPerformingAction}
-                className="text-green-600 hover:text-green-700 hover:bg-green-100"
-              >
-                {isPerformingAction ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : (
-                  <Play className="h-4 w-4" />
-                )}
-                <span className="ml-1">Start</span>
-              </Button>
-            ) : isRunning ? (
-              <>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  onClick={() => handleAction("stop")}
-                  disabled={isPerformingAction}
-                  className="text-red-600 hover:text-red-700 hover:bg-red-100"
-                >
-                  {isPerformingAction ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  ) : (
-                    <Square className="h-4 w-4" />
-                  )}
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  onClick={() => handleAction("reset")}
-                  disabled={isPerformingAction}
-                  className="text-orange-600 hover:text-orange-700 hover:bg-orange-100"
-                >
-                  <RotateCcw className="h-4 w-4" />
-                </Button>
-              </>
-            ) : null}
-          </div>
-        )}
-      </div>
-
-      {/* Confirmation Dialog */}
-      <AlertDialog open={!!confirmAction} onOpenChange={() => setConfirmAction(null)}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>
-              {confirmAction === "stop" ? "Stop" : "Reset"} {vm.name || `VM ${vm.vmid}`}?
-            </AlertDialogTitle>
-            <AlertDialogDescription>
-              {confirmAction === "stop"
-                ? "This will gracefully stop the virtual machine. Any unsaved data may be lost."
-                : "This will immediately reset the virtual machine. All unsaved data will be lost."}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={confirmAndExecute}
-              className={confirmAction === "reset" ? "bg-orange-600 hover:bg-orange-700" : "bg-red-600 hover:bg-red-700"}
-            >
-              {confirmAction === "stop" ? "Stop VM" : "Reset VM"}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-    </>
+      </CardHeader>
+      <CardContent>
+        <div className="h-64">
+          <ResponsiveContainer width="100%" height="100%">
+            <ComposedChart data={data.hourly}>
+              <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
+              <XAxis 
+                dataKey="time" 
+                tickFormatter={formatXAxis}
+                className="text-xs"
+                tick={{ fill: 'hsl(var(--muted-foreground))' }}
+              />
+              <YAxis 
+                yAxisId="left"
+                domain={[0, 100]}
+                className="text-xs"
+                tick={{ fill: 'hsl(var(--muted-foreground))' }}
+                label={{ value: 'Success %', angle: -90, position: 'insideLeft' }}
+              />
+              <YAxis 
+                yAxisId="right"
+                orientation="right"
+                className="text-xs"
+                tick={{ fill: 'hsl(var(--muted-foreground))' }}
+                label={{ value: 'Response (ms)', angle: 90, position: 'insideRight' }}
+              />
+              <Tooltip content={<CustomTooltip />} />
+              <Legend />
+              <Area
+                yAxisId="left"
+                type="monotone"
+                dataKey="successRate"
+                name="Success Rate"
+                stroke="hsl(var(--success))"
+                fill="hsl(var(--success))"
+                fillOpacity={0.2}
+              />
+              <Line
+                yAxisId="right"
+                type="monotone"
+                dataKey="avgResponseTime"
+                name="Avg Response (ms)"
+                stroke="hsl(var(--primary))"
+                strokeWidth={2}
+                dot={false}
+              />
+            </ComposedChart>
+          </ResponsiveContainer>
+        </div>
+        <p className="text-xs text-muted-foreground mt-2 text-center">
+          {data.summary.totalAttempts} connection attempts in the last 24 hours
+        </p>
+      </CardContent>
+    </Card>
   );
 }
 ```
 
-### 3.2 Update TenantDashboard with VM Quick Actions Section
+### 1.4 Add Chart to Server Details in ProxmoxServers Page
 
-**File: `src/pages/TenantDashboard.tsx`** (Update)
+**File: `src/pages/ProxmoxServers.tsx`** (Update)
 
-Add new import and VM Quick Actions section after the Node Status section:
+Add a collapsible details section for each server showing the connection history chart:
+
+```tsx
+// Add import
+import { ConnectionHistoryChart } from "@/components/servers/ConnectionHistoryChart";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+
+// In server card/row, add expandable section:
+<Collapsible>
+  <CollapsibleTrigger asChild>
+    <Button variant="ghost" size="sm">
+      <ChevronDown className="h-4 w-4 mr-1" />
+      Details
+    </Button>
+  </CollapsibleTrigger>
+  <CollapsibleContent className="mt-4">
+    <ConnectionHistoryChart serverId={server.id} serverName={server.name} />
+  </CollapsibleContent>
+</Collapsible>
+```
+
+---
+
+## Part 2: Real-Time Connection Status Updates
+
+### 2.1 Create useServerRealtimeUpdates Hook
+
+**File: `src/hooks/useServerRealtimeUpdates.ts`** (New)
+
+```typescript
+import { useEffect, useCallback } from "react";
+import { supabase } from "@/integrations/supabase/client";
+import { useQueryClient } from "@tanstack/react-query";
+import type { ProxmoxServer, ConnectionStatus } from "@/lib/types";
+import { RealtimePostgresChangesPayload } from "@supabase/supabase-js";
+
+type ServerUpdatePayload = RealtimePostgresChangesPayload<{
+  [key: string]: any;
+}>;
+
+export function useServerRealtimeUpdates(tenantId: string | undefined) {
+  const queryClient = useQueryClient();
+
+  const handleServerUpdate = useCallback(
+    (payload: ServerUpdatePayload) => {
+      if (payload.eventType === "UPDATE" && payload.new) {
+        // Update the server in the cache
+        queryClient.setQueryData<ProxmoxServer[]>(
+          ["proxmox-servers", tenantId],
+          (oldData) => {
+            if (!oldData) return oldData;
+            return oldData.map((server) =>
+              server.id === payload.new.id
+                ? {
+                    ...server,
+                    connection_status: payload.new.connection_status as ConnectionStatus,
+                    last_health_check_at: payload.new.last_health_check_at,
+                    health_check_error: payload.new.health_check_error,
+                    last_connected_at: payload.new.last_connected_at,
+                    learned_timeout_ms: payload.new.learned_timeout_ms,
+                    avg_response_time_ms: payload.new.avg_response_time_ms,
+                    success_rate: payload.new.success_rate,
+                  }
+                : server
+            );
+          }
+        );
+
+        // Also invalidate tenant stats if a server status changed
+        if (payload.old?.connection_status !== payload.new.connection_status) {
+          queryClient.invalidateQueries({ queryKey: ["tenant-live-stats", tenantId] });
+        }
+      }
+    },
+    [queryClient, tenantId]
+  );
+
+  useEffect(() => {
+    if (!tenantId) return;
+
+    // Subscribe to proxmox_servers changes for this tenant
+    const channel = supabase
+      .channel(`servers-${tenantId}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "UPDATE",
+          schema: "public",
+          table: "proxmox_servers",
+          filter: `tenant_id=eq.${tenantId}`,
+        },
+        handleServerUpdate
+      )
+      .subscribe((status) => {
+        console.log(`Realtime subscription status: ${status}`);
+      });
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [tenantId, handleServerUpdate]);
+}
+```
+
+### 2.2 Create useConnectionMetricsRealtime Hook
+
+**File: `src/hooks/useConnectionMetricsRealtime.ts`** (New)
+
+For real-time chart updates when new metrics are recorded:
+
+```typescript
+import { useEffect, useCallback } from "react";
+import { supabase } from "@/integrations/supabase/client";
+import { useQueryClient } from "@tanstack/react-query";
+
+export function useConnectionMetricsRealtime(serverId: string | undefined) {
+  const queryClient = useQueryClient();
+
+  const handleNewMetric = useCallback(() => {
+    // Invalidate the connection history query to refetch
+    queryClient.invalidateQueries({ queryKey: ["connection-history", serverId] });
+  }, [queryClient, serverId]);
+
+  useEffect(() => {
+    if (!serverId) return;
+
+    const channel = supabase
+      .channel(`metrics-${serverId}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "INSERT",
+          schema: "public",
+          table: "connection_metrics",
+          filter: `server_id=eq.${serverId}`,
+        },
+        handleNewMetric
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [serverId, handleNewMetric]);
+}
+```
+
+### 2.3 Integrate Realtime into useProxmoxServers Hook
+
+**File: `src/hooks/useProxmoxServers.ts`** (Update)
+
+Add Realtime subscription alongside existing polling:
+
+```typescript
+// Add import
+import { useServerRealtimeUpdates } from "./useServerRealtimeUpdates";
+
+export function useProxmoxServers(tenantId?: string) {
+  // ... existing state ...
+
+  // Subscribe to real-time updates for immediate status changes
+  useServerRealtimeUpdates(tenantId);
+
+  // ... rest of existing code ...
+}
+```
+
+### 2.4 Add Visual Indicator for Live Updates
+
+**File: `src/components/servers/LiveStatusIndicator.tsx`** (New)
+
+```typescript
+import { Activity, Wifi, WifiOff } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import { useEffect, useState } from "react";
+import { supabase } from "@/integrations/supabase/client";
+
+interface LiveStatusIndicatorProps {
+  tenantId?: string;
+}
+
+export function LiveStatusIndicator({ tenantId }: LiveStatusIndicatorProps) {
+  const [isConnected, setIsConnected] = useState(false);
+  const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
+
+  useEffect(() => {
+    if (!tenantId) return;
+
+    const channel = supabase.channel(`presence-${tenantId}`);
+    
+    channel
+      .subscribe((status) => {
+        setIsConnected(status === "SUBSCRIBED");
+      });
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [tenantId]);
+
+  return (
+    <div className="flex items-center gap-2 text-xs text-muted-foreground">
+      {isConnected ? (
+        <>
+          <Activity className="h-3 w-3 animate-pulse text-green-500" />
+          <span>Live updates active</span>
+        </>
+      ) : (
+        <>
+          <WifiOff className="h-3 w-3 text-muted-foreground" />
+          <span>Connecting...</span>
+        </>
+      )}
+    </div>
+  );
+}
+```
+
+---
+
+## Part 3: VM Console Connection Button
+
+### 3.1 Update VMQuickActions Component
+
+**File: `src/components/dashboard/VMQuickActions.tsx`** (Update)
+
+Add console button for running VMs:
 
 ```tsx
 // Add imports
-import { useTenantVMs } from "@/hooks/useTenantVMs";
-import { VMQuickActions } from "@/components/dashboard/VMQuickActions";
-import { MonitorPlay } from "lucide-react";
+import { useNavigate } from "react-router-dom";
+import { Terminal } from "lucide-react";
 
-// Inside component, add hook
-const { vms, isLoading: isVMsLoading, performAction, isPerformingAction } = useTenantVMs(tenantId);
-const { canManageVMs } = useTenantPermissions(tenantId);
+// Inside component, add navigate hook
+const navigate = useNavigate();
 
-// Get first 5 running/stopped VMs (not templates)
-const recentVMs = vms
-  .filter(vm => !vm.template && (vm.status === 'running' || vm.status === 'stopped'))
-  .slice(0, 5);
-```
+// Add console handler
+const handleOpenConsole = () => {
+  navigate(`/console/${vm.node}/${vm.vmid}?type=${vm.type}${vm.serverId ? `&serverId=${vm.serverId}` : ''}`);
+};
 
-Add new section before Quick Actions:
-
-```tsx
-{/* VM Quick Actions - visible to managers+ */}
-{canManageVMs && (
-  <div>
-    <div className="flex items-center justify-between mb-4">
-      <h2 className="text-lg font-semibold flex items-center gap-2">
-        <MonitorPlay className="h-5 w-5" />
-        VM Quick Actions
-      </h2>
-      <Button variant="ghost" size="sm" asChild>
-        <Link to={`/tenants/${tenantId}/vms`}>
-          View All VMs
-        </Link>
-      </Button>
-    </div>
-    
-    {isVMsLoading ? (
-      <div className="space-y-2">
-        {[1, 2, 3].map(i => (
-          <Skeleton key={i} className="h-16 w-full" />
-        ))}
-      </div>
-    ) : recentVMs.length === 0 ? (
-      <Card className="border-dashed">
-        <CardContent className="flex items-center justify-center py-8 text-muted-foreground">
-          No virtual machines found
-        </CardContent>
-      </Card>
-    ) : (
-      <div className="space-y-2">
-        {recentVMs.map(vm => (
-          <VMQuickActions
-            key={`${vm.serverId}-${vm.node}-${vm.vmid}`}
-            vm={vm}
-            onAction={async (action) => {
-              await performAction({
-                vmid: vm.vmid,
-                node: vm.node,
-                action,
-                vmType: vm.type,
-                vmName: vm.name,
-                serverId: vm.serverId,
-                serverName: vm.serverName,
-              });
-            }}
-            isPerformingAction={isPerformingAction}
-            canManage={canManageVMs}
-          />
-        ))}
-      </div>
-    )}
-  </div>
+// In the actions section for running VMs, add console button:
+{isRunning && (
+  <>
+    <TooltipProvider>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={handleOpenConsole}
+            className="text-primary hover:text-primary hover:bg-primary/10"
+          >
+            <Terminal className="h-4 w-4" />
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent>Open Console</TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
+    {/* Existing stop and reset buttons */}
+    <TooltipProvider>
+      <Tooltip>
+        {/* ... stop button ... */}
+      </Tooltip>
+    </TooltipProvider>
+    <TooltipProvider>
+      <Tooltip>
+        {/* ... reset button ... */}
+      </Tooltip>
+    </TooltipProvider>
+  </>
 )}
 ```
 
-### 3.3 Update Dashboard Index Export
+### 3.2 Update Console Page to Accept serverId
 
-**File: `src/components/dashboard/index.ts`** (Update)
+**File: `src/pages/Console.tsx`** (Update)
 
-Add export for new component:
+Handle serverId from URL params:
+
+```tsx
+export default function Console() {
+  const { node, vmid } = useParams<{ node: string; vmid: string }>();
+  const [searchParams] = useSearchParams();
+  const navigate = useNavigate();
+  const vmType = (searchParams.get("type") as "qemu" | "lxc") || "qemu";
+  const serverId = searchParams.get("serverId"); // Add this
+
+  const vmConsole = useVMConsole();
+  const [connection, setConnection] = useState<VNCConnection | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const fetchConsole = async () => {
+    if (!node || !vmid) return;
+
+    setError(null);
+    try {
+      const data = await vmConsole.mutateAsync({
+        node,
+        vmid: parseInt(vmid),
+        vmType,
+        serverId: serverId || undefined, // Pass serverId to the mutation
+      });
+      setConnection(data);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to connect");
+    }
+  };
+
+  // ... rest of component
+}
+```
+
+### 3.3 Update useVMConsole Hook
+
+**File: `src/hooks/useVMs.ts`** (Update)
+
+Ensure serverId is passed to the edge function:
 
 ```typescript
-export { VMQuickActions } from "./VMQuickActions";
+export function useVMConsole() {
+  return useMutation({
+    mutationFn: async ({
+      node,
+      vmid,
+      vmType = "qemu",
+      serverId,
+    }: {
+      node: string;
+      vmid: number;
+      vmType?: "qemu" | "lxc";
+      serverId?: string;
+    }): Promise<VNCConnection> => {
+      const { data, error } = await supabase.functions.invoke("vm-console", {
+        body: { node, vmid, vmType, serverId },
+      });
+
+      if (error) throw error;
+      if (!data) throw new Error("No connection data received");
+      
+      return data;
+    },
+  });
+}
+```
+
+---
+
+## Part 4: Type Updates
+
+**File: `src/lib/types.ts`** (Update)
+
+Add types for connection history:
+
+```typescript
+// Connection History Types
+export interface HourlyConnectionMetric {
+  time: string;
+  successRate: number;
+  avgResponseTime: number | null;
+  attempts: number;
+}
+
+export interface ConnectionHistorySummary {
+  totalAttempts: number;
+  successCount: number;
+  avgResponseTime: number | null;
+}
+
+export interface ConnectionHistory {
+  hourly: HourlyConnectionMetric[];
+  summary: ConnectionHistorySummary;
+}
+```
+
+---
+
+## Part 5: Update Exports
+
+**File: `src/components/servers/index.ts`** (Update)
+
+```typescript
+export { ConnectionHistoryChart } from "./ConnectionHistoryChart";
+export { LiveStatusIndicator } from "./LiveStatusIndicator";
 ```
 
 ---
@@ -585,16 +696,32 @@ export { VMQuickActions } from "./VMQuickActions";
 
 | Step | Task | Files |
 |------|------|-------|
-| 1 | Create storage bucket migration | SQL migration |
-| 2 | Create useLogoUpload hook | `src/hooks/useLogoUpload.ts` |
-| 3 | Update TenantSettings with upload UI | `src/pages/TenantSettings.tsx` |
-| 4 | Add fetchWithRetry to proxmox-servers | `supabase/functions/proxmox-servers/index.ts` |
-| 5 | Update health-check-all with retry | `supabase/functions/proxmox-servers/index.ts` |
-| 6 | Update test connection with retry | `supabase/functions/proxmox-servers/index.ts` |
-| 7 | Create VMQuickActions component | `src/components/dashboard/VMQuickActions.tsx` |
-| 8 | Update TenantDashboard | `src/pages/TenantDashboard.tsx` |
-| 9 | Update dashboard index export | `src/components/dashboard/index.ts` |
-| 10 | Deploy edge functions | Deployment |
+| 1 | Update connection-metrics edge function with get-history action | `supabase/functions/connection-metrics/index.ts` |
+| 2 | Update types | `src/lib/types.ts` |
+| 3 | Create useConnectionHistory hook | `src/hooks/useConnectionHistory.ts` |
+| 4 | Create ConnectionHistoryChart component | `src/components/servers/ConnectionHistoryChart.tsx` |
+| 5 | Create useServerRealtimeUpdates hook | `src/hooks/useServerRealtimeUpdates.ts` |
+| 6 | Create useConnectionMetricsRealtime hook | `src/hooks/useConnectionMetricsRealtime.ts` |
+| 7 | Create LiveStatusIndicator component | `src/components/servers/LiveStatusIndicator.tsx` |
+| 8 | Integrate realtime into useProxmoxServers | `src/hooks/useProxmoxServers.ts` |
+| 9 | Update VMQuickActions with console button | `src/components/dashboard/VMQuickActions.tsx` |
+| 10 | Update Console page for serverId | `src/pages/Console.tsx` |
+| 11 | Update useVMConsole hook | `src/hooks/useVMs.ts` |
+| 12 | Add chart to ProxmoxServers page | `src/pages/ProxmoxServers.tsx` |
+| 13 | Update servers exports | `src/components/servers/index.ts` |
+| 14 | Deploy edge function | Deployment |
+
+---
+
+## Supabase Realtime Configuration
+
+Realtime is enabled by default on Supabase, but ensure the `proxmox_servers` and `connection_metrics` tables are included in the Realtime publication:
+
+```sql
+-- Enable Realtime for these tables (if not already enabled)
+ALTER PUBLICATION supabase_realtime ADD TABLE proxmox_servers;
+ALTER PUBLICATION supabase_realtime ADD TABLE connection_metrics;
+```
 
 ---
 
@@ -602,58 +729,53 @@ export { VMQuickActions } from "./VMQuickActions";
 
 | Component | Changes |
 |-----------|---------|
-| **Database** | Create `tenant-logos` storage bucket with RLS policies |
-| **useLogoUpload** | New hook for logo upload/delete operations |
-| **TenantSettings** | Replace URL input with file upload UI, preview, and remove button |
-| **proxmox-servers** | Add `fetchWithRetry` helper with exponential backoff (1s, 2s, 4s, 8s) |
-| **VMQuickActions** | New component for inline VM power controls with confirmation dialogs |
-| **TenantDashboard** | Add VM Quick Actions section showing first 5 VMs with power controls |
-| **dashboard/index.ts** | Export VMQuickActions component |
+| **connection-metrics** | Add `get-history` action for 24-hour time-series data |
+| **ConnectionHistoryChart** | New component using recharts for dual-axis chart |
+| **useConnectionHistory** | New hook for fetching connection history |
+| **useServerRealtimeUpdates** | New hook for Supabase Realtime on server status |
+| **useConnectionMetricsRealtime** | New hook for Realtime on new metrics |
+| **LiveStatusIndicator** | New component showing live connection status |
+| **useProxmoxServers** | Integrate Realtime for instant status updates |
+| **VMQuickActions** | Add Terminal button for console access on running VMs |
+| **Console** | Accept serverId from URL for multi-server support |
+| **useVMConsole** | Pass serverId to edge function |
+| **ProxmoxServers** | Add collapsible details with connection history chart |
+| **Types** | Add ConnectionHistory interfaces |
 
 ---
 
 ## Security Considerations
 
-1. **Logo Upload Security**:
-   - File type validation (JPEG, PNG, WebP, SVG only)
-   - File size limit (2MB)
-   - RLS policies restrict uploads to tenant admins
-   - Files stored in tenant-specific folders
-
-2. **Retry Logic Security**:
-   - Max retries capped at 3 for Tailscale, 1 for direct
-   - Delay capped at 8 seconds to prevent indefinite blocking
-   - Timeout errors skip retry (already waited)
-
-3. **VM Actions Security**:
-   - Role-based visibility (managers+ only)
-   - Confirmation dialogs for destructive actions
-   - Audit logging via vm-actions edge function
+1. **RLS for Realtime**: Existing RLS policies on `proxmox_servers` and `connection_metrics` ensure users only receive updates for servers they have access to
+2. **Console Access**: Existing permission checks in `vm-console` edge function validate user access before allowing connections
+3. **Rate Limiting**: Realtime subscriptions are filtered by tenant_id to reduce unnecessary updates
 
 ---
 
-## Retry Algorithm Visualization
+## Visual Representation
 
+**Connection History Chart:**
 ```text
-Direct Connection:
-  Attempt 1 (immediate)
-    ↓ fail
-  Wait: 500ms + jitter
-  Attempt 2 (final)
-    ↓ fail
-  Return error
++--------------------------------------------------+
+|  Connection History           24h   ▼  97%  245ms|
++--------------------------------------------------+
+| 100% |    ████████████████████████████           |
+|  80% |                                           |
+|  60% |                                           |
+|  40% |                                           |
+|  20% |                                           |
+|   0% +-------------------------------------------+
+|      00:00  04:00  08:00  12:00  16:00  20:00    |
+|      ─── Success Rate   ─── Avg Response (ms)    |
++--------------------------------------------------+
+```
 
-Tailscale Connection:
-  Attempt 1 (immediate)
-    ↓ fail
-  Wait: 1000ms + jitter
-  Attempt 2
-    ↓ fail  
-  Wait: 2000ms + jitter
-  Attempt 3
-    ↓ fail
-  Wait: 4000ms + jitter
-  Attempt 4 (final)
-    ↓ fail
-  Return error
+**VM Quick Actions with Console:**
+```text
++--------------------------------------------------+
+| Web Server (101)  [Running]  [📟] [■] [↺]        |
+| Database (102)    [Running]  [📟] [■] [↺]        |
+| Dev Server (103)  [Stopped]       [▶ Start]      |
++--------------------------------------------------+
+          Console^   Stop^ Reset^
 ```
