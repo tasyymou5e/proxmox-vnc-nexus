@@ -21,7 +21,7 @@ async function getAuthHeaders(): Promise<Record<string, string>> {
 
 const HEALTH_CHECK_INTERVAL = 120000; // 2 minutes
 
-export function useProxmoxServers() {
+export function useProxmoxServers(tenantId?: string) {
   const [servers, setServers] = useState<ProxmoxServer[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -33,10 +33,12 @@ export function useProxmoxServers() {
     setError(null);
     try {
       const headers = await getAuthHeaders();
-      const response = await fetch(
-        `${API_CONFIG.SUPABASE_URL}${API_CONFIG.FUNCTIONS_PATH}/proxmox-servers`,
-        { method: "GET", headers }
-      );
+      // Add tenantId as query param if provided
+      const url = tenantId
+        ? `${API_CONFIG.SUPABASE_URL}${API_CONFIG.FUNCTIONS_PATH}/proxmox-servers?tenantId=${tenantId}`
+        : `${API_CONFIG.SUPABASE_URL}${API_CONFIG.FUNCTIONS_PATH}/proxmox-servers`;
+      
+      const response = await fetch(url, { method: "GET", headers });
       const data = await response.json();
       if (!response.ok) {
         throw new Error(data.error || "Failed to fetch servers");
@@ -47,16 +49,19 @@ export function useProxmoxServers() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [tenantId]);
 
   const createServer = useCallback(async (input: ProxmoxServerInput): Promise<ProxmoxServer> => {
+    if (!tenantId) {
+      throw new Error("tenantId is required to create a server");
+    }
     const headers = await getAuthHeaders();
     const response = await fetch(
       `${API_CONFIG.SUPABASE_URL}${API_CONFIG.FUNCTIONS_PATH}/proxmox-servers`,
       {
         method: "POST",
         headers,
-        body: JSON.stringify(input),
+        body: JSON.stringify({ ...input, tenantId }),
       }
     );
     const data = await response.json();
@@ -65,7 +70,7 @@ export function useProxmoxServers() {
     }
     setServers((prev) => [data.server, ...prev]);
     return data.server;
-  }, []);
+  }, [tenantId]);
 
   const updateServer = useCallback(async (
     id: string,
@@ -74,6 +79,7 @@ export function useProxmoxServers() {
       use_tailscale?: boolean;
       tailscale_hostname?: string;
       tailscale_port?: number;
+      connection_timeout?: number;
     }
   ): Promise<ProxmoxServer> => {
     const headers = await getAuthHeaders();
@@ -121,7 +127,7 @@ export function useProxmoxServers() {
       {
         method: "POST",
         headers,
-        body: JSON.stringify({ action: "test", ...input }),
+        body: JSON.stringify({ action: "test", tenantId, ...input }),
       }
     );
     const data = await response.json();
@@ -156,7 +162,7 @@ export function useProxmoxServers() {
       );
     }
     return data;
-  }, []);
+  }, [tenantId]);
 
   const runHealthChecks = useCallback(async (): Promise<HealthCheckResult[]> => {
     setHealthCheckLoading(true);
@@ -175,7 +181,7 @@ export function useProxmoxServers() {
         {
           method: "POST",
           headers,
-          body: JSON.stringify({ action: "health-check-all" }),
+          body: JSON.stringify({ action: "health-check-all", tenantId }),
         }
       );
       const data = await response.json();
@@ -214,18 +220,21 @@ export function useProxmoxServers() {
     } finally {
       setHealthCheckLoading(false);
     }
-  }, []);
+  }, [tenantId]);
 
   const bulkImportServers = useCallback(async (
     serversToImport: ProxmoxServerInput[]
   ): Promise<BulkImportResult> => {
+    if (!tenantId) {
+      throw new Error("tenantId is required for bulk import");
+    }
     const headers = await getAuthHeaders();
     const response = await fetch(
       `${API_CONFIG.SUPABASE_URL}${API_CONFIG.FUNCTIONS_PATH}/proxmox-servers`,
       {
         method: "POST",
         headers,
-        body: JSON.stringify({ action: "bulk-import", servers: serversToImport }),
+        body: JSON.stringify({ action: "bulk-import", servers: serversToImport, tenantId }),
       }
     );
     const data = await response.json();
@@ -237,7 +246,7 @@ export function useProxmoxServers() {
     await fetchServers();
     
     return data;
-  }, [fetchServers]);
+  }, [fetchServers, tenantId]);
 
   // Auto-refresh health checks every 2 minutes when page is visible
   useEffect(() => {

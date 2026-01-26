@@ -150,6 +150,19 @@ export function useTenantUsers(tenantId: string | undefined) {
     },
   });
 
+  const updateUserRole = useMutation({
+    mutationFn: async ({ userId, role }: { userId: string; role: TenantRole }) => {
+      await callTenantsFunction("update-user-role", { tenantId, data: { user_id: userId, role } });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["tenant-users", tenantId] });
+      toast({ title: "User role updated" });
+    },
+    onError: (error: Error) => {
+      toast({ title: "Failed to update role", description: error.message, variant: "destructive" });
+    },
+  });
+
   const removeUser = useMutation({
     mutationFn: async (userId: string) => {
       await callTenantsFunction("remove-user", { tenantId, data: { user_id: userId } });
@@ -167,6 +180,25 @@ export function useTenantUsers(tenantId: string | undefined) {
     users: usersQuery.data ?? [],
     isLoading: usersQuery.isLoading,
     assignUser,
+    updateUserRole,
     removeUser,
   };
+}
+
+export function useSearchUsers(tenantId: string | undefined, query: string) {
+  return useQuery({
+    queryKey: ["search-users", tenantId, query],
+    queryFn: async () => {
+      if (!query || query.length < 2) return [];
+      const result = await callTenantsFunction("search-users", { tenantId, data: { query } });
+      return result.users as Array<{
+        id: string;
+        email: string;
+        full_name: string | null;
+        username: string | null;
+        avatar_url: string | null;
+      }>;
+    },
+    enabled: query.length >= 2,
+  });
 }
