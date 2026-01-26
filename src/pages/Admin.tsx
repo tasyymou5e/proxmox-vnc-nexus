@@ -21,6 +21,15 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import {
+  Pagination,
+  PaginationContent,
+  PaginationEllipsis,
+  PaginationItem,
+  PaginationLink,
+  PaginationNext,
+  PaginationPrevious,
+} from "@/components/ui/pagination";
+import {
   Dialog,
   DialogContent,
   DialogDescription,
@@ -68,6 +77,8 @@ export default function Admin() {
   const [roleChangeUser, setRoleChangeUser] = useState<UserWithRole | null>(null);
   const [roleChangeLoading, setRoleChangeLoading] = useState(false);
   const [deleteUser, setDeleteUser] = useState<UserWithRole | null>(null);
+  const [currentPage, setCurrentPage] = useState(1);
+  const USERS_PER_PAGE = 10;
   const [deleteLoading, setDeleteLoading] = useState(false);
 
   useEffect(() => {
@@ -75,6 +86,34 @@ export default function Admin() {
       fetchData();
     }
   }, [isAdmin]);
+
+  // Reset to page 1 when users change
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [users.length]);
+
+  // Pagination calculations
+  const totalPages = Math.ceil(users.length / USERS_PER_PAGE);
+  const startIndex = (currentPage - 1) * USERS_PER_PAGE;
+  const endIndex = startIndex + USERS_PER_PAGE;
+  const paginatedUsers = users.slice(startIndex, endIndex);
+
+  // Helper function to generate page numbers with ellipsis
+  const generatePageNumbers = (current: number, total: number): (number | "ellipsis")[] => {
+    if (total <= 7) {
+      return Array.from({ length: total }, (_, i) => i + 1);
+    }
+    
+    if (current <= 3) {
+      return [1, 2, 3, 4, 5, "ellipsis", total];
+    }
+    
+    if (current >= total - 2) {
+      return [1, "ellipsis", total - 4, total - 3, total - 2, total - 1, total];
+    }
+    
+    return [1, "ellipsis", current - 1, current, current + 1, "ellipsis", total];
+  };
 
   const fetchData = async () => {
     setLoading(true);
@@ -315,7 +354,7 @@ export default function Admin() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {users.map((user) => (
+                  {paginatedUsers.map((user) => (
                     <TableRow key={user.id}>
                       <TableCell className="font-medium">{user.email}</TableCell>
                       <TableCell>{user.full_name || "-"}</TableCell>
@@ -473,6 +512,48 @@ export default function Admin() {
                   ))}
                 </TableBody>
               </Table>
+            )}
+            
+            {/* Pagination Controls */}
+            {!loading && totalPages > 1 && (
+              <div className="flex items-center justify-between mt-4 pt-4 border-t">
+                <p className="text-sm text-muted-foreground">
+                  Showing {startIndex + 1} to {Math.min(endIndex, users.length)} of {users.length} users
+                </p>
+                <Pagination>
+                  <PaginationContent>
+                    <PaginationItem>
+                      <PaginationPrevious
+                        onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                        className={currentPage === 1 ? "pointer-events-none opacity-50" : "cursor-pointer"}
+                      />
+                    </PaginationItem>
+                    
+                    {generatePageNumbers(currentPage, totalPages).map((page, index) => (
+                      <PaginationItem key={index}>
+                        {page === "ellipsis" ? (
+                          <PaginationEllipsis />
+                        ) : (
+                          <PaginationLink
+                            onClick={() => setCurrentPage(page)}
+                            isActive={currentPage === page}
+                            className="cursor-pointer"
+                          >
+                            {page}
+                          </PaginationLink>
+                        )}
+                      </PaginationItem>
+                    ))}
+                    
+                    <PaginationItem>
+                      <PaginationNext
+                        onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                        className={currentPage === totalPages ? "pointer-events-none opacity-50" : "cursor-pointer"}
+                      />
+                    </PaginationItem>
+                  </PaginationContent>
+                </Pagination>
+              </div>
             )}
           </CardContent>
         </Card>
