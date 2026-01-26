@@ -77,6 +77,48 @@ export type Database = {
         }
         Relationships: []
       }
+      proxmox_servers: {
+        Row: {
+          api_token_encrypted: string
+          created_at: string | null
+          host: string
+          id: string
+          is_active: boolean | null
+          last_connected_at: string | null
+          name: string
+          port: number
+          updated_at: string | null
+          user_id: string
+          verify_ssl: boolean | null
+        }
+        Insert: {
+          api_token_encrypted: string
+          created_at?: string | null
+          host: string
+          id?: string
+          is_active?: boolean | null
+          last_connected_at?: string | null
+          name: string
+          port?: number
+          updated_at?: string | null
+          user_id: string
+          verify_ssl?: boolean | null
+        }
+        Update: {
+          api_token_encrypted?: string
+          created_at?: string | null
+          host?: string
+          id?: string
+          is_active?: boolean | null
+          last_connected_at?: string | null
+          name?: string
+          port?: number
+          updated_at?: string | null
+          user_id?: string
+          verify_ssl?: boolean | null
+        }
+        Relationships: []
+      }
       user_roles: {
         Row: {
           created_at: string | null
