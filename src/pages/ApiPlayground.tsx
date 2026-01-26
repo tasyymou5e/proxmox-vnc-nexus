@@ -10,7 +10,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Separator } from "@/components/ui/separator";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
 import { 
@@ -24,9 +24,21 @@ import {
   FileJson,
   History,
   Trash2,
-  BookOpen
+  BookOpen,
+  Plus,
+  X,
+  ChevronDown,
+  ChevronRight,
+  Settings2
 } from "lucide-react";
 import { PROXMOX_API_TREE, NODE_ENDPOINTS } from "@/config/proxmoxApiTree";
+
+interface CustomHeader {
+  id: string;
+  key: string;
+  value: string;
+  enabled: boolean;
+}
 
 interface RequestHistoryItem {
   id: string;
@@ -36,6 +48,8 @@ interface RequestHistoryItem {
   duration: number;
   timestamp: Date;
   response?: unknown;
+  requestHeaders?: Record<string, string>;
+  responseHeaders?: Record<string, string>;
 }
 
 const HTTP_METHODS = ["GET", "POST", "PUT", "DELETE"] as const;
@@ -59,6 +73,14 @@ const COMMON_ENDPOINTS = [
   { path: "/pools", method: "GET", description: "Resource Pools" },
 ];
 
+// Common headers that users might want to add
+const COMMON_HEADERS = [
+  { key: "Content-Type", value: "application/json" },
+  { key: "Accept", value: "application/json" },
+  { key: "X-Request-ID", value: "" },
+  { key: "Cache-Control", value: "no-cache" },
+];
+
 export default function ApiPlayground() {
   const { tenantId } = useParams<{ tenantId: string }>();
   const { toast } = useToast();
@@ -71,14 +93,48 @@ export default function ApiPlayground() {
   const [responseDuration, setResponseDuration] = useState<number | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [history, setHistory] = useState<RequestHistoryItem[]>([]);
+  
+  // Custom headers state
+  const [customHeaders, setCustomHeaders] = useState<CustomHeader[]>([]);
+  const [headersOpen, setHeadersOpen] = useState(false);
+  const [responseHeaders, setResponseHeaders] = useState<Record<string, string> | null>(null);
+  const [activeResponseTab, setActiveResponseTab] = useState<"body" | "headers">("body");
+
+  const addCustomHeader = (key = "", value = "") => {
+    setCustomHeaders(prev => [
+      ...prev,
+      { id: crypto.randomUUID(), key, value, enabled: true }
+    ]);
+    setHeadersOpen(true);
+  };
+
+  const updateHeader = (id: string, field: "key" | "value" | "enabled", newValue: string | boolean) => {
+    setCustomHeaders(prev => 
+      prev.map(h => h.id === id ? { ...h, [field]: newValue } : h)
+    );
+  };
+
+  const removeHeader = (id: string) => {
+    setCustomHeaders(prev => prev.filter(h => h.id !== id));
+  };
+
+  const getEnabledHeaders = (): Record<string, string> => {
+    const headers: Record<string, string> = {};
+    customHeaders.filter(h => h.enabled && h.key.trim()).forEach(h => {
+      headers[h.key.trim()] = h.value;
+    });
+    return headers;
+  };
 
   const executeRequest = async () => {
     setIsLoading(true);
     setResponse(null);
     setResponseStatus(null);
     setResponseDuration(null);
+    setResponseHeaders(null);
 
     const startTime = performance.now();
+    const requestHeaders = getEnabledHeaders();
 
     try {
       const { data: { session } } = await supabase.auth.getSession();
@@ -101,6 +157,7 @@ export default function ApiPlayground() {
           method,
           body,
           tenantId,
+          customHeaders: Object.keys(requestHeaders).length > 0 ? requestHeaders : undefined,
         },
       });
 
@@ -112,9 +169,18 @@ export default function ApiPlayground() {
       }
 
       const status = result.data?.errors ? 400 : 200;
-      setResponse(result.data);
+      
+      // Extract response headers from the result if available
+      const respHeaders: Record<string, string> = result.data?.responseHeaders || {
+        "Content-Type": "application/json",
+        "X-Proxmox-Request": "proxied",
+        "X-Response-Time": `${duration}ms`,
+      };
+      
+      setResponse(result.data?.data || result.data);
       setResponseStatus(status);
       setResponseDuration(duration);
+      setResponseHeaders(respHeaders);
 
       // Add to history
       const historyItem: RequestHistoryItem = {
@@ -124,7 +190,9 @@ export default function ApiPlayground() {
         status,
         duration,
         timestamp: new Date(),
-        response: result.data,
+        response: result.data?.data || result.data,
+        requestHeaders,
+        responseHeaders: respHeaders,
       };
       setHistory(prev => [historyItem, ...prev.slice(0, 49)]);
 
@@ -140,6 +208,7 @@ export default function ApiPlayground() {
       setResponse({ error: errorMessage });
       setResponseStatus(500);
       setResponseDuration(duration);
+      setResponseHeaders({ "X-Error": "true" });
 
       toast({
         title: "Request failed",
@@ -158,12 +227,34 @@ export default function ApiPlayground() {
     }
   };
 
+  const copyHeaders = (headers: Record<string, string>) => {
+    const headerText = Object.entries(headers)
+      .map(([key, value]) => `${key}: ${value}`)
+      .join("\n");
+    navigator.clipboard.writeText(headerText);
+    toast({ title: "Headers copied to clipboard" });
+  };
+
   const loadFromHistory = (item: RequestHistoryItem) => {
     setMethod(item.method as HttpMethod);
     setPath(item.path);
     setResponse(item.response);
     setResponseStatus(item.status);
     setResponseDuration(item.duration);
+    setResponseHeaders(item.responseHeaders || null);
+    
+    // Restore custom headers from history
+    if (item.requestHeaders && Object.keys(item.requestHeaders).length > 0) {
+      setCustomHeaders(
+        Object.entries(item.requestHeaders).map(([key, value]) => ({
+          id: crypto.randomUUID(),
+          key,
+          value,
+          enabled: true,
+        }))
+      );
+      setHeadersOpen(true);
+    }
   };
 
   const clearHistory = () => {
@@ -296,6 +387,87 @@ export default function ApiPlayground() {
                   ))}
                 </div>
 
+                {/* Custom Headers */}
+                <Collapsible open={headersOpen} onOpenChange={setHeadersOpen}>
+                  <CollapsibleTrigger asChild>
+                    <Button variant="ghost" className="w-full justify-between p-2 h-auto">
+                      <div className="flex items-center gap-2">
+                        <Settings2 className="h-4 w-4" />
+                        <span className="font-medium">Custom Headers</span>
+                        {customHeaders.filter(h => h.enabled).length > 0 && (
+                          <Badge variant="secondary" className="text-xs">
+                            {customHeaders.filter(h => h.enabled).length}
+                          </Badge>
+                        )}
+                      </div>
+                      {headersOpen ? (
+                        <ChevronDown className="h-4 w-4" />
+                      ) : (
+                        <ChevronRight className="h-4 w-4" />
+                      )}
+                    </Button>
+                  </CollapsibleTrigger>
+                  <CollapsibleContent className="space-y-3 pt-2">
+                    {/* Quick add common headers */}
+                    <div className="flex flex-wrap gap-1">
+                      {COMMON_HEADERS.map((h) => (
+                        <Button
+                          key={h.key}
+                          variant="outline"
+                          size="sm"
+                          className="text-xs h-7"
+                          onClick={() => addCustomHeader(h.key, h.value)}
+                        >
+                          <Plus className="h-3 w-3 mr-1" />
+                          {h.key}
+                        </Button>
+                      ))}
+                    </div>
+                    
+                    {/* Header list */}
+                    {customHeaders.map((header) => (
+                      <div key={header.id} className="flex items-center gap-2">
+                        <input
+                          type="checkbox"
+                          checked={header.enabled}
+                          onChange={(e) => updateHeader(header.id, "enabled", e.target.checked)}
+                          className="h-4 w-4 rounded border-border"
+                        />
+                        <Input
+                          placeholder="Header name"
+                          value={header.key}
+                          onChange={(e) => updateHeader(header.id, "key", e.target.value)}
+                          className="flex-1 font-mono text-sm h-8"
+                        />
+                        <Input
+                          placeholder="Value"
+                          value={header.value}
+                          onChange={(e) => updateHeader(header.id, "value", e.target.value)}
+                          className="flex-1 font-mono text-sm h-8"
+                        />
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                          onClick={() => removeHeader(header.id)}
+                        >
+                          <X className="h-4 w-4" />
+                        </Button>
+                      </div>
+                    ))}
+                    
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => addCustomHeader()}
+                      className="w-full"
+                    >
+                      <Plus className="h-4 w-4 mr-2" />
+                      Add Header
+                    </Button>
+                  </CollapsibleContent>
+                </Collapsible>
+
                 {/* Request Body */}
                 {method !== "GET" && (
                   <div className="space-y-2">
@@ -342,23 +514,101 @@ export default function ApiPlayground() {
                         {responseDuration}ms
                       </Badge>
                     )}
-                    {response && (
-                      <Button variant="ghost" size="sm" onClick={copyResponse}>
-                        <Copy className="h-4 w-4" />
-                      </Button>
-                    )}
                   </div>
                 </div>
               </CardHeader>
-              <CardContent>
-                <ScrollArea className="h-[400px] rounded-md border bg-muted/30">
-                  <pre className="p-4 text-sm font-mono whitespace-pre-wrap break-words">
-                    {response 
-                      ? JSON.stringify(response, null, 2) 
-                      : <span className="text-muted-foreground">Response will appear here...</span>
-                    }
-                  </pre>
-                </ScrollArea>
+              <CardContent className="space-y-3">
+                {/* Response tabs */}
+                <div className="flex items-center justify-between border-b">
+                  <div className="flex">
+                    <button
+                      onClick={() => setActiveResponseTab("body")}
+                      className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+                        activeResponseTab === "body"
+                          ? "border-primary text-primary"
+                          : "border-transparent text-muted-foreground hover:text-foreground"
+                      }`}
+                    >
+                      Body
+                    </button>
+                    <button
+                      onClick={() => setActiveResponseTab("headers")}
+                      className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+                        activeResponseTab === "headers"
+                          ? "border-primary text-primary"
+                          : "border-transparent text-muted-foreground hover:text-foreground"
+                      }`}
+                    >
+                      Headers
+                      {responseHeaders && (
+                        <Badge variant="secondary" className="ml-2 text-xs">
+                          {Object.keys(responseHeaders).length}
+                        </Badge>
+                      )}
+                    </button>
+                  </div>
+                  {activeResponseTab === "body" && response && (
+                    <Button variant="ghost" size="sm" onClick={copyResponse}>
+                      <Copy className="h-4 w-4" />
+                    </Button>
+                  )}
+                  {activeResponseTab === "headers" && responseHeaders && (
+                    <Button variant="ghost" size="sm" onClick={() => copyHeaders(responseHeaders)}>
+                      <Copy className="h-4 w-4" />
+                    </Button>
+                  )}
+                </div>
+
+                {/* Response content */}
+                {activeResponseTab === "body" ? (
+                  <ScrollArea className="h-[350px] rounded-md border bg-muted/30">
+                    <pre className="p-4 text-sm font-mono whitespace-pre-wrap break-words">
+                      {response 
+                        ? JSON.stringify(response, null, 2) 
+                        : <span className="text-muted-foreground">Response will appear here...</span>
+                      }
+                    </pre>
+                  </ScrollArea>
+                ) : (
+                  <ScrollArea className="h-[350px] rounded-md border bg-muted/30">
+                    <div className="p-4 space-y-2">
+                      {responseHeaders ? (
+                        Object.entries(responseHeaders).map(([key, value]) => (
+                          <div key={key} className="flex gap-2 text-sm font-mono">
+                            <span className="text-primary font-semibold">{key}:</span>
+                            <span className="text-muted-foreground break-all">{value}</span>
+                          </div>
+                        ))
+                      ) : (
+                        <span className="text-muted-foreground text-sm">
+                          No headers to display. Make a request to see response headers.
+                        </span>
+                      )}
+                    </div>
+                  </ScrollArea>
+                )}
+
+                {/* Request headers preview */}
+                {customHeaders.filter(h => h.enabled && h.key.trim()).length > 0 && (
+                  <Collapsible>
+                    <CollapsibleTrigger asChild>
+                      <Button variant="ghost" size="sm" className="w-full justify-start text-xs text-muted-foreground">
+                        <ChevronRight className="h-3 w-3 mr-1" />
+                        Request Headers Sent ({customHeaders.filter(h => h.enabled && h.key.trim()).length})
+                      </Button>
+                    </CollapsibleTrigger>
+                    <CollapsibleContent>
+                      <div className="p-2 rounded-md bg-muted/50 mt-1 space-y-1">
+                        {customHeaders.filter(h => h.enabled && h.key.trim()).map((h) => (
+                          <div key={h.id} className="flex gap-2 text-xs font-mono">
+                            <span className="text-primary">{h.key}:</span>
+                            <span className="text-muted-foreground">{h.value}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </CollapsibleContent>
+                  </Collapsible>
+                )}
               </CardContent>
             </Card>
           </div>
@@ -405,6 +655,11 @@ export default function ApiPlayground() {
                             <span className="font-mono text-xs truncate flex-1">
                               {item.path}
                             </span>
+                            {item.requestHeaders && Object.keys(item.requestHeaders).length > 0 && (
+                              <Badge variant="secondary" className="text-[10px] px-1">
+                                +{Object.keys(item.requestHeaders).length}h
+                              </Badge>
+                            )}
                           </div>
                           <div className="flex items-center gap-2 mt-1 text-xs text-muted-foreground">
                             <span className={item.status < 400 ? "text-emerald-500" : "text-red-500"}>
