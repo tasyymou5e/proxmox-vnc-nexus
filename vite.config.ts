@@ -19,4 +19,12 @@ export default defineConfig(({ mode }) => ({
       "@": path.resolve(__dirname, "./src"),
     },
   },
+  optimizeDeps: {
+    include: ["@novnc/novnc/core/rfb"],
+  },
+  build: {
+    commonjsOptions: {
+      include: [/@novnc\/novnc/, /node_modules/],
+    },
+  },
 }));
