@@ -1,12 +1,38 @@
 import { supabase } from "@/integrations/supabase/client";
+import { API_CONFIG } from "./constants";
 import type { VM, VNCConnection } from "./types";
 
-const SUPABASE_URL = "https://lbfabewnshfjdjfosqxl.supabase.co";
+// Error types
+export interface APIError {
+  error: string;
+  code?: string;
+  status: number;
+  details?: unknown;
+}
+
+export class APIException extends Error {
+  code?: string;
+  status: number;
+  details?: unknown;
+
+  constructor(apiError: APIError) {
+    super(apiError.error);
+    this.name = "APIException";
+    this.code = apiError.code;
+    this.status = apiError.status;
+    this.details = apiError.details;
+  }
+}
 
 async function getAuthHeaders(): Promise<Record<string, string>> {
-  const { data: { session } } = await supabase.auth.getSession();
+  const {
+    data: { session },
+  } = await supabase.auth.getSession();
   if (!session?.access_token) {
-    throw new Error("Not authenticated");
+    throw new APIException({
+      error: "Not authenticated",
+      status: 401,
+    });
   }
   return {
     Authorization: `Bearer ${session.access_token}`,
@@ -14,21 +40,32 @@ async function getAuthHeaders(): Promise<Record<string, string>> {
   };
 }
 
+async function handleResponse<T>(response: Response): Promise<T> {
+  if (!response.ok) {
+    const errorBody = await response.json().catch(() => ({}));
+    throw new APIException({
+      error: errorBody.error || `Request failed with status ${response.status}`,
+      code: errorBody.code,
+      status: response.status,
+      details: errorBody.details,
+    });
+  }
+  return response.json();
+}
+
 export async function listVMs(): Promise<{ vms: VM[]; isAdmin: boolean }> {
   const headers = await getAuthHeaders();
-  
-  const response = await fetch(`${SUPABASE_URL}/functions/v1/list-vms`, {
-    method: "POST",
-    headers,
-    body: JSON.stringify({}),
-  });
 
-  if (!response.ok) {
-    const error = await response.json();
-    throw new Error(error.error || "Failed to fetch VMs");
-  }
+  const response = await fetch(
+    `${API_CONFIG.SUPABASE_URL}${API_CONFIG.FUNCTIONS_PATH}/list-vms`,
+    {
+      method: "POST",
+      headers,
+      body: JSON.stringify({}),
+    }
+  );
 
-  return response.json();
+  return handleResponse(response);
 }
 
 export async function getVMConsole(
@@ -37,19 +74,30 @@ export async function getVMConsole(
   vmType: "qemu" | "lxc" = "qemu"
 ): Promise<VNCConnection> {
   const headers = await getAuthHeaders();
-  
-  const response = await fetch(`${SUPABASE_URL}/functions/v1/vm-console`, {
-    method: "POST",
-    headers,
-    body: JSON.stringify({ node, vmid, vmType }),
-  });
 
-  if (!response.ok) {
-    const error = await response.json();
-    throw new Error(error.error || "Failed to get console access");
-  }
+  const response = await fetch(
+    `${API_CONFIG.SUPABASE_URL}${API_CONFIG.FUNCTIONS_PATH}/vm-console`,
+    {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ node, vmid, vmType }),
+    }
+  );
 
-  return response.json();
+  const data = await handleResponse<VNCConnection>(response);
+
+  // Build relay URL with JWT for WebSocket connection
+  const {
+    data: { session },
+  } = await supabase.auth.getSession();
+  const jwt = session?.access_token;
+
+  const relayUrl = `wss://${API_CONFIG.SUPABASE_URL.replace("https://", "")}${API_CONFIG.FUNCTIONS_PATH}/vnc-relay?jwt=${jwt}&node=${node}&vmid=${vmid}&type=${vmType}`;
+
+  return {
+    ...data,
+    relayUrl,
+  };
 }
 
 export async function performVMAction(
@@ -59,19 +107,17 @@ export async function performVMAction(
   vmType: "qemu" | "lxc" = "qemu"
 ): Promise<{ success: boolean; message: string; upid?: string }> {
   const headers = await getAuthHeaders();
-  
-  const response = await fetch(`${SUPABASE_URL}/functions/v1/vm-actions`, {
-    method: "POST",
-    headers,
-    body: JSON.stringify({ node, vmid, action, vmType }),
-  });
 
-  if (!response.ok) {
-    const error = await response.json();
-    throw new Error(error.error || `Failed to ${action} VM`);
-  }
+  const response = await fetch(
+    `${API_CONFIG.SUPABASE_URL}${API_CONFIG.FUNCTIONS_PATH}/vm-actions`,
+    {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ node, vmid, action, vmType }),
+    }
+  );
 
-  return response.json();
+  return handleResponse(response);
 }
 
 export async function proxmoxApiCall<T>(
@@ -80,17 +126,15 @@ export async function proxmoxApiCall<T>(
   body?: Record<string, unknown>
 ): Promise<T> {
   const headers = await getAuthHeaders();
-  
-  const response = await fetch(`${SUPABASE_URL}/functions/v1/proxmox-api`, {
-    method: "POST",
-    headers,
-    body: JSON.stringify({ path, method, body }),
-  });
 
-  if (!response.ok) {
-    const error = await response.json();
-    throw new Error(error.error || "Proxmox API call failed");
-  }
+  const response = await fetch(
+    `${API_CONFIG.SUPABASE_URL}${API_CONFIG.FUNCTIONS_PATH}/proxmox-api`,
+    {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ path, method, body }),
+    }
+  );
 
-  return response.json();
+  return handleResponse(response);
 }
