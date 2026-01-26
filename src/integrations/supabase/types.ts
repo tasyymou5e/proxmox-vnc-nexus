@@ -305,6 +305,9 @@ export type Database = {
       tenant_settings: {
         Row: {
           accent_color: string | null
+          alert_latency_threshold_ms: number | null
+          alert_offline_duration_seconds: number | null
+          alert_success_rate_threshold: number | null
           auto_health_check_interval: number | null
           created_at: string | null
           default_connection_timeout: number | null
@@ -322,6 +325,9 @@ export type Database = {
         }
         Insert: {
           accent_color?: string | null
+          alert_latency_threshold_ms?: number | null
+          alert_offline_duration_seconds?: number | null
+          alert_success_rate_threshold?: number | null
           auto_health_check_interval?: number | null
           created_at?: string | null
           default_connection_timeout?: number | null
@@ -339,6 +345,9 @@ export type Database = {
         }
         Update: {
           accent_color?: string | null
+          alert_latency_threshold_ms?: number | null
+          alert_offline_duration_seconds?: number | null
+          alert_success_rate_threshold?: number | null
           auto_health_check_interval?: number | null
           created_at?: string | null
           default_connection_timeout?: number | null

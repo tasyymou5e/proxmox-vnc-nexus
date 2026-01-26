@@ -26,16 +26,16 @@ export function useConnectionHealthAlerts({
   checkIntervalMs = 60000,
 }: UseConnectionHealthAlertsProps) {
   const { toast } = useToast();
-  const previousStates = useRef<Map<string, { status: string; successRate: number }>>(new Map());
+  const previousStates = useRef<Map<string, { status: string; successRate: number; latency: number }>>(new Map());
   const alertsShown = useRef<Set<string>>(new Set());
 
-  // Fetch tenant settings for notification preferences
+  // Fetch tenant settings for notification preferences and thresholds
   const { data: settings } = useQuery({
     queryKey: ["tenant-settings", tenantId],
     queryFn: async () => {
       const { data, error } = await supabase
         .from("tenant_settings")
-        .select("notify_on_server_offline")
+        .select("notify_on_server_offline, alert_success_rate_threshold, alert_latency_threshold_ms, alert_offline_duration_seconds")
         .eq("tenant_id", tenantId)
         .maybeSingle();
       
@@ -45,13 +45,17 @@ export function useConnectionHealthAlerts({
     enabled: enabled && !!tenantId,
   });
 
+  // Use tenant settings thresholds or fall back to defaults/props
+  const effectiveSuccessThreshold = settings?.alert_success_rate_threshold ?? successRateThreshold;
+  const effectiveLatencyThreshold = settings?.alert_latency_threshold_ms ?? 500;
+
   // Fetch server health data
   const { data: servers, refetch } = useQuery({
     queryKey: ["server-health", tenantId],
     queryFn: async () => {
       const { data, error } = await supabase
         .from("proxmox_servers")
-        .select("id, name, connection_status, success_rate, last_health_check_at")
+        .select("id, name, connection_status, success_rate, avg_response_time_ms, last_health_check_at")
         .eq("tenant_id", tenantId)
         .eq("is_active", true);
       
@@ -93,6 +97,7 @@ export function useConnectionHealthAlerts({
 
     servers.forEach(server => {
       const prevState = previousStates.current.get(server.id);
+      const avgResponseTime = server.avg_response_time_ms || 0;
       const currentStatus = server.connection_status || "unknown";
       const currentSuccessRate = server.success_rate || 0;
       const alertKey = `${server.id}-${currentStatus}`;
@@ -101,8 +106,8 @@ export function useConnectionHealthAlerts({
       if (prevState) {
         const wasOnline = prevState.status === "online";
         const isOnline = currentStatus === "online";
-        const wasDegraded = prevState.successRate < successRateThreshold;
-        const isDegraded = currentSuccessRate < successRateThreshold;
+        const wasDegraded = prevState.successRate < effectiveSuccessThreshold || prevState.latency > effectiveLatencyThreshold;
+        const isDegraded = currentSuccessRate < effectiveSuccessThreshold || avgResponseTime > effectiveLatencyThreshold;
 
         // Server went offline
         if (wasOnline && !isOnline && !alertsShown.current.has(alertKey)) {
@@ -125,20 +130,24 @@ export function useConnectionHealthAlerts({
           alertsShown.current.add(alertKey);
         }
 
-        // Server success rate dropped below threshold
+        // Server success rate dropped below threshold or latency exceeded
         if (!wasDegraded && isDegraded && isOnline && !alertsShown.current.has(`${server.id}-degraded`)) {
+          const degradeReason = currentSuccessRate < effectiveSuccessThreshold 
+            ? `success rate dropped to ${currentSuccessRate.toFixed(1)}%`
+            : `latency increased to ${avgResponseTime}ms`;
+          
           const alert: HealthAlert = {
             serverId: server.id,
             serverName: server.name,
             alertType: "degraded",
             successRate: currentSuccessRate,
-            threshold: successRateThreshold,
+            threshold: effectiveSuccessThreshold,
             timestamp: new Date(),
           };
 
           toast({
             title: "Server Degraded",
-            description: `${server.name} success rate dropped to ${currentSuccessRate.toFixed(1)}%`,
+            description: `${server.name} ${degradeReason}`,
             variant: "destructive",
           });
 
@@ -178,21 +187,24 @@ export function useConnectionHealthAlerts({
       previousStates.current.set(server.id, {
         status: currentStatus,
         successRate: currentSuccessRate,
+        latency: avgResponseTime,
       });
     });
-  }, [servers, enabled, settings?.notify_on_server_offline, successRateThreshold, toast, logAlert]);
+  }, [servers, enabled, settings?.notify_on_server_offline, effectiveSuccessThreshold, effectiveLatencyThreshold, toast, logAlert]);
 
-  // Get current alerts
+  // Get current alerts - include latency-based degradation
   const currentAlerts = (servers || [])
     .filter(s => 
       s.connection_status !== "online" || 
-      (s.success_rate !== null && s.success_rate < successRateThreshold)
+      (s.success_rate !== null && s.success_rate < effectiveSuccessThreshold) ||
+      (s.avg_response_time_ms !== null && s.avg_response_time_ms > effectiveLatencyThreshold)
     )
     .map(s => ({
       serverId: s.id,
       serverName: s.name,
       status: s.connection_status || "unknown",
       successRate: s.success_rate || 0,
+      avgLatency: s.avg_response_time_ms || 0,
       lastCheck: s.last_health_check_at,
     }));
 
@@ -200,5 +212,9 @@ export function useConnectionHealthAlerts({
     alerts: currentAlerts,
     refetch,
     isEnabled: settings?.notify_on_server_offline ?? true,
+    thresholds: {
+      successRate: effectiveSuccessThreshold,
+      latencyMs: effectiveLatencyThreshold,
+    },
   };
 }

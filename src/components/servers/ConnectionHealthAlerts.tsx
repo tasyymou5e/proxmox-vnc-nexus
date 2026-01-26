@@ -22,10 +22,14 @@ export function ConnectionHealthAlerts({
   tenantId,
   successRateThreshold = 80 
 }: ConnectionHealthAlertsProps) {
-  const { alerts, refetch, isEnabled } = useConnectionHealthAlerts({
+  const { alerts, refetch, isEnabled, thresholds } = useConnectionHealthAlerts({
     tenantId,
     successRateThreshold,
   });
+
+  // Use configured thresholds from tenant settings
+  const displayThreshold = thresholds?.successRate ?? successRateThreshold;
+  const latencyThreshold = thresholds?.latencyMs ?? 500;
 
   const hasAlerts = alerts.length > 0;
 
@@ -65,7 +69,7 @@ export function ConnectionHealthAlerts({
             <CheckCircle2 className="h-12 w-12 mx-auto text-emerald-500 mb-3" />
             <p className="font-medium text-foreground">All Systems Operational</p>
             <p className="text-sm text-muted-foreground">
-              All servers are online with success rates above {successRateThreshold}%
+              All servers online with success rates above {displayThreshold}% and latency below {latencyThreshold}ms
             </p>
           </div>
         ) : (
@@ -96,8 +100,10 @@ export function ConnectionHealthAlerts({
                     <div className="text-sm text-muted-foreground mt-1">
                       {alert.status === "offline" ? (
                         "Server is not responding to health checks"
+                      ) : alert.successRate < displayThreshold ? (
+                        `Success rate: ${alert.successRate.toFixed(1)}% (threshold: ${displayThreshold}%)`
                       ) : (
-                        `Success rate: ${alert.successRate.toFixed(1)}% (threshold: ${successRateThreshold}%)`
+                        `Latency: ${alert.avgLatency}ms (threshold: ${latencyThreshold}ms)`
                       )}
                     </div>
                     {alert.lastCheck && (

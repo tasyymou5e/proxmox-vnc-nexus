@@ -20,6 +20,10 @@ interface TenantSettingsRequest {
     default_connection_timeout: number;
     default_verify_ssl: boolean;
     auto_health_check_interval: number;
+    // Alert thresholds
+    alert_success_rate_threshold: number;
+    alert_latency_threshold_ms: number;
+    alert_offline_duration_seconds: number;
   }>;
 }
 
