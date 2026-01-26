@@ -16,6 +16,8 @@ export function SignupForm({ onToggleMode }: SignupFormProps) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [fullName, setFullName] = useState("");
+  const [username, setUsername] = useState("");
+  const [companyName, setCompanyName] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -26,8 +28,20 @@ export function SignupForm({ onToggleMode }: SignupFormProps) {
     setError(null);
     setLoading(true);
 
+    if (!fullName.trim() || !username.trim() || !companyName.trim()) {
+      setError("All fields are required");
+      setLoading(false);
+      return;
+    }
+
+    if (!/^[a-zA-Z0-9_]+$/.test(username)) {
+      setError("Username can only contain letters, numbers, and underscores");
+      setLoading(false);
+      return;
+    }
+
     try {
-      const { error } = await signUp(email, password, fullName);
+      const { error } = await signUp(email, password, fullName, username, companyName);
       if (error) {
         setError(error.message);
       } else {
@@ -100,6 +114,34 @@ export function SignupForm({ onToggleMode }: SignupFormProps) {
                 placeholder="John Doe"
                 value={fullName}
                 onChange={(e) => setFullName(e.target.value)}
+                required
+                disabled={loading}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="username">Username</Label>
+              <Input
+                id="username"
+                type="text"
+                placeholder="johndoe"
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                required
+                disabled={loading}
+              />
+              <p className="text-xs text-muted-foreground">
+                Letters, numbers, and underscores only
+              </p>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="companyName">Company Name</Label>
+              <Input
+                id="companyName"
+                type="text"
+                placeholder="Acme Corporation"
+                value={companyName}
+                onChange={(e) => setCompanyName(e.target.value)}
+                required
                 disabled={loading}
               />
             </div>
