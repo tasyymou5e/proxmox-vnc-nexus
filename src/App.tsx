@@ -19,6 +19,7 @@ const Admin = lazy(() => import("./pages/Admin"));
 const Profile = lazy(() => import("./pages/Profile"));
 const ProxmoxServers = lazy(() => import("./pages/ProxmoxServers"));
 const Docs = lazy(() => import("./pages/Docs"));
+const VMMonitoring = lazy(() => import("./pages/VMMonitoring"));
 
 // Tenant pages
 const TenantSelector = lazy(() => import("./pages/TenantSelector"));
@@ -148,7 +149,17 @@ function AppRoutes() {
             </Suspense>
           </ProtectedRoute>
         }
-        />
+      />
+      <Route
+        path="/vm/:serverId/:node/:vmid/monitoring"
+        element={
+          <ProtectedRoute>
+            <Suspense fallback={<PageLoader />}>
+              <VMMonitoring />
+            </Suspense>
+          </ProtectedRoute>
+        }
+      />
         {/* Tenant routes */}
         <Route
           path="/tenants"
