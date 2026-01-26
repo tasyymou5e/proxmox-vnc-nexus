@@ -30,6 +30,71 @@ function decryptToken(encryptedToken: string, key: string): string {
   return new TextDecoder().decode(decrypted);
 }
 
+// Retry configuration for exponential backoff
+interface RetryConfig {
+  maxRetries: number;
+  baseDelayMs: number;
+  maxDelayMs: number;
+}
+
+interface FetchWithRetryResult {
+  response: Response | null;
+  error: Error | null;
+  attempts: number;
+  totalTimeMs: number;
+}
+
+async function fetchWithRetry(
+  url: string,
+  options: RequestInit,
+  config: RetryConfig = { maxRetries: 3, baseDelayMs: 1000, maxDelayMs: 8000 }
+): Promise<FetchWithRetryResult> {
+  const startTime = Date.now();
+  let lastError: Error | null = null;
+  
+  for (let attempt = 0; attempt <= config.maxRetries; attempt++) {
+    try {
+      const response = await fetch(url, options);
+      
+      // Success - return immediately
+      return {
+        response,
+        error: null,
+        attempts: attempt + 1,
+        totalTimeMs: Date.now() - startTime,
+      };
+    } catch (error) {
+      lastError = error as Error;
+      
+      // Don't retry on timeout errors (AbortError) - they already waited
+      if ((error as Error).name === 'TimeoutError' || (error as Error).name === 'AbortError') {
+        break;
+      }
+      
+      // If more retries available, wait with exponential backoff
+      if (attempt < config.maxRetries) {
+        // Exponential backoff: 1s, 2s, 4s, 8s (capped at maxDelayMs)
+        const delay = Math.min(
+          config.baseDelayMs * Math.pow(2, attempt),
+          config.maxDelayMs
+        );
+        // Add jitter (0-20% of delay)
+        const jitter = delay * 0.2 * Math.random();
+        
+        console.log(`Retry ${attempt + 1}/${config.maxRetries} after ${Math.round(delay + jitter)}ms`);
+        await new Promise(r => setTimeout(r, delay + jitter));
+      }
+    }
+  }
+  
+  return {
+    response: null,
+    error: lastError,
+    attempts: config.maxRetries + 1,
+    totalTimeMs: Date.now() - startTime,
+  };
+}
+
 interface ServerInput {
   name: string;
   host: string;
@@ -200,12 +265,38 @@ Deno.serve(async (req) => {
             const timeout = server.connection_timeout || 10000;
             
             const testUrl = `https://${effectiveHost}:${effectivePort}/api2/json/nodes`;
-            const testResponse = await fetch(testUrl, {
-              headers: { "Authorization": `PVEAPIToken=${decryptedToken}` },
-              signal: AbortSignal.timeout(timeout),
-            });
+            
+            // Use fetchWithRetry with more retries for Tailscale connections
+            const retryConfig: RetryConfig = useTailscale 
+              ? { maxRetries: 3, baseDelayMs: 1000, maxDelayMs: 8000 }
+              : { maxRetries: 1, baseDelayMs: 500, maxDelayMs: 2000 };
+            
+            const { response: testResponse, error: fetchError, attempts } = await fetchWithRetry(
+              testUrl,
+              {
+                headers: { "Authorization": `PVEAPIToken=${decryptedToken}` },
+                signal: AbortSignal.timeout(timeout),
+              },
+              retryConfig
+            );
 
-            if (testResponse.ok) {
+            // Log retry info if multiple attempts
+            if (attempts > 1) {
+              console.log(`Server ${server.name}: ${testResponse ? 'Succeeded' : 'Failed'} after ${attempts} attempts`);
+            }
+
+            if (fetchError) {
+              result.error = `${fetchError.message}${attempts > 1 ? ` (after ${attempts} attempts)` : ''}`;
+              
+              await supabase
+                .from("proxmox_servers")
+                .update({
+                  connection_status: 'offline',
+                  last_health_check_at: new Date().toISOString(),
+                  health_check_error: result.error,
+                })
+                .eq("id", server.id);
+            } else if (testResponse && testResponse.ok) {
               const testData = await testResponse.json();
               result.status = 'online';
               result.nodes = testData.data?.length || 0;
@@ -220,7 +311,7 @@ Deno.serve(async (req) => {
                   health_check_error: null,
                 })
                 .eq("id", server.id);
-            } else {
+            } else if (testResponse) {
               const errorData = await testResponse.json().catch(() => ({}));
               result.error = errorData.errors || `HTTP ${testResponse.status}`;
 
@@ -234,7 +325,7 @@ Deno.serve(async (req) => {
                 .eq("id", server.id);
             }
           } catch (err) {
-            result.error = err.message || "Connection failed";
+            result.error = (err as Error).message || "Connection failed";
 
             await supabase
               .from("proxmox_servers")
@@ -411,14 +502,46 @@ Deno.serve(async (req) => {
 
         try {
           const testUrl = `https://${serverHost}:${serverPort}/api2/json/nodes`;
-          const testResponse = await fetch(testUrl, {
-            headers: {
-              "Authorization": `PVEAPIToken=${tokenToUse}`,
+          
+          // Use fetchWithRetry with more retries for Tailscale connections
+          const useTailscale = body.server_id && body.use_tailscale;
+          const retryConfig: RetryConfig = useTailscale
+            ? { maxRetries: 3, baseDelayMs: 1000, maxDelayMs: 8000 }
+            : { maxRetries: 1, baseDelayMs: 500, maxDelayMs: 2000 };
+          
+          const { response: testResponse, error: fetchError, attempts } = await fetchWithRetry(
+            testUrl,
+            {
+              headers: { "Authorization": `PVEAPIToken=${tokenToUse}` },
+              signal: AbortSignal.timeout(timeout),
             },
-            signal: AbortSignal.timeout(timeout),
-          });
+            retryConfig
+          );
+          
+          if (fetchError) {
+            // Update status if server_id provided
+            if (server_id) {
+              await supabase
+                .from("proxmox_servers")
+                .update({ 
+                  connection_status: 'offline',
+                  last_health_check_at: new Date().toISOString(),
+                  health_check_error: `${fetchError.message}${attempts > 1 ? ` (after ${attempts} attempts)` : ''}`
+                })
+                .eq("id", server_id);
+            }
 
-          const testData = await testResponse.json();
+            return new Response(
+              JSON.stringify({ 
+                success: false, 
+                error: fetchError.message,
+                retryAttempts: attempts
+              }),
+              { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+            );
+          }
+
+          const testData = await testResponse!.json();
 
           if (!testResponse.ok) {
             // Update status if server_id provided
@@ -459,8 +582,9 @@ Deno.serve(async (req) => {
           return new Response(
             JSON.stringify({ 
               success: true, 
-              message: "Connection successful",
-              nodes: testData.data?.length || 0
+              message: `Connection successful${attempts > 1 ? ` (${attempts} attempts)` : ''}`,
+              nodes: testData.data?.length || 0,
+              retryAttempts: attempts
             }),
             { headers: { ...corsHeaders, "Content-Type": "application/json" } }
           );
