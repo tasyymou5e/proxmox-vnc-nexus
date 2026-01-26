@@ -77,6 +77,54 @@ export type Database = {
         }
         Relationships: []
       }
+      proxmox_api_configs: {
+        Row: {
+          config_data: Json
+          config_path: string
+          created_at: string | null
+          id: string
+          last_synced_at: string | null
+          server_id: string
+          tenant_id: string
+          updated_at: string | null
+        }
+        Insert: {
+          config_data?: Json
+          config_path: string
+          created_at?: string | null
+          id?: string
+          last_synced_at?: string | null
+          server_id: string
+          tenant_id: string
+          updated_at?: string | null
+        }
+        Update: {
+          config_data?: Json
+          config_path?: string
+          created_at?: string | null
+          id?: string
+          last_synced_at?: string | null
+          server_id?: string
+          tenant_id?: string
+          updated_at?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "proxmox_api_configs_server_id_fkey"
+            columns: ["server_id"]
+            isOneToOne: false
+            referencedRelation: "proxmox_servers"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "proxmox_api_configs_tenant_id_fkey"
+            columns: ["tenant_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       proxmox_servers: {
         Row: {
           api_token_encrypted: string
@@ -92,6 +140,7 @@ export type Database = {
           port: number
           tailscale_hostname: string | null
           tailscale_port: number | null
+          tenant_id: string | null
           updated_at: string | null
           use_tailscale: boolean | null
           user_id: string
@@ -111,6 +160,7 @@ export type Database = {
           port?: number
           tailscale_hostname?: string | null
           tailscale_port?: number | null
+          tenant_id?: string | null
           updated_at?: string | null
           use_tailscale?: boolean | null
           user_id: string
@@ -130,10 +180,55 @@ export type Database = {
           port?: number
           tailscale_hostname?: string | null
           tailscale_port?: number | null
+          tenant_id?: string | null
           updated_at?: string | null
           use_tailscale?: boolean | null
           user_id?: string
           verify_ssl?: boolean | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "proxmox_servers_tenant_id_fkey"
+            columns: ["tenant_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      tenants: {
+        Row: {
+          created_at: string | null
+          created_by: string | null
+          description: string | null
+          id: string
+          is_active: boolean | null
+          logo_url: string | null
+          name: string
+          slug: string
+          updated_at: string | null
+        }
+        Insert: {
+          created_at?: string | null
+          created_by?: string | null
+          description?: string | null
+          id?: string
+          is_active?: boolean | null
+          logo_url?: string | null
+          name: string
+          slug: string
+          updated_at?: string | null
+        }
+        Update: {
+          created_at?: string | null
+          created_by?: string | null
+          description?: string | null
+          id?: string
+          is_active?: boolean | null
+          logo_url?: string | null
+          name?: string
+          slug?: string
+          updated_at?: string | null
         }
         Relationships: []
       }
@@ -157,6 +252,38 @@ export type Database = {
           user_id?: string
         }
         Relationships: []
+      }
+      user_tenant_assignments: {
+        Row: {
+          created_at: string | null
+          id: string
+          role: Database["public"]["Enums"]["tenant_role"]
+          tenant_id: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string | null
+          id?: string
+          role?: Database["public"]["Enums"]["tenant_role"]
+          tenant_id: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string | null
+          id?: string
+          role?: Database["public"]["Enums"]["tenant_role"]
+          tenant_id?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "user_tenant_assignments_tenant_id_fkey"
+            columns: ["tenant_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       user_vm_assignments: {
         Row: {
@@ -203,9 +330,22 @@ export type Database = {
         }
         Returns: boolean
       }
+      has_tenant_role: {
+        Args: {
+          _roles: Database["public"]["Enums"]["tenant_role"][]
+          _tenant_id: string
+          _user_id: string
+        }
+        Returns: boolean
+      }
+      user_has_tenant_access: {
+        Args: { _tenant_id: string; _user_id: string }
+        Returns: boolean
+      }
     }
     Enums: {
       app_role: "admin" | "user"
+      tenant_role: "admin" | "manager" | "viewer"
     }
     CompositeTypes: {
       [_ in never]: never
@@ -334,6 +474,7 @@ export const Constants = {
   public: {
     Enums: {
       app_role: ["admin", "user"],
+      tenant_role: ["admin", "manager", "viewer"],
     },
   },
 } as const

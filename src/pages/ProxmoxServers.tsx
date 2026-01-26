@@ -112,7 +112,12 @@ function ConnectionStatusBadge({ status, error }: { status: ConnectionStatus; er
   );
 }
 
-export default function ProxmoxServers() {
+interface ProxmoxServersProps {
+  tenantId?: string;
+  hideLayout?: boolean;
+}
+
+export default function ProxmoxServers({ tenantId, hideLayout }: ProxmoxServersProps = {}) {
   const { toast } = useToast();
   const {
     servers,
@@ -354,8 +359,12 @@ export default function ProxmoxServers() {
     return result;
   };
 
+  const Layout = hideLayout 
+    ? ({ children }: { children: React.ReactNode }) => <>{children}</> 
+    : DashboardLayout;
+
   return (
-    <DashboardLayout>
+    <Layout>
       <div className="p-6 max-w-6xl mx-auto space-y-6">
         {/* Header */}
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
@@ -729,6 +738,6 @@ export default function ProxmoxServers() {
           remainingSlots={50 - servers.length}
         />
       </div>
-    </DashboardLayout>
+    </Layout>
   );
 }

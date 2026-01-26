@@ -22,6 +22,7 @@ import {
   X,
   Settings,
   Database,
+  Building2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -45,6 +46,11 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
       label: "Dashboard",
       href: "/dashboard",
       icon: LayoutDashboard,
+    },
+    {
+      label: "Tenants",
+      href: "/tenants",
+      icon: Building2,
     },
     {
       label: "Servers",

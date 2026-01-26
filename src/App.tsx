@@ -19,6 +19,12 @@ const Admin = lazy(() => import("./pages/Admin"));
 const Profile = lazy(() => import("./pages/Profile"));
 const ProxmoxServers = lazy(() => import("./pages/ProxmoxServers"));
 
+// Tenant pages
+const TenantSelector = lazy(() => import("./pages/TenantSelector"));
+const TenantDashboard = lazy(() => import("./pages/TenantDashboard"));
+const TenantServers = lazy(() => import("./pages/TenantServers"));
+const ProxmoxApiExplorer = lazy(() => import("./pages/ProxmoxApiExplorer"));
+
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
@@ -129,11 +135,92 @@ function AppRoutes() {
             </Suspense>
           </ProtectedRoute>
         }
-      />
-      <Route path="*" element={<NotFound />} />
-    </Routes>
-  );
-}
+        />
+        {/* Tenant routes */}
+        <Route
+          path="/tenants"
+          element={
+            <ProtectedRoute>
+              <Suspense fallback={<PageLoader />}>
+                <TenantSelector />
+              </Suspense>
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/tenants/:tenantId"
+          element={
+            <ProtectedRoute>
+              <Suspense fallback={<PageLoader />}>
+                <TenantDashboard />
+              </Suspense>
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/tenants/:tenantId/servers"
+          element={
+            <ProtectedRoute>
+              <Suspense fallback={<PageLoader />}>
+                <TenantServers />
+              </Suspense>
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/tenants/:tenantId/cluster/*"
+          element={
+            <ProtectedRoute>
+              <Suspense fallback={<PageLoader />}>
+                <ProxmoxApiExplorer section="cluster" />
+              </Suspense>
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/tenants/:tenantId/nodes/*"
+          element={
+            <ProtectedRoute>
+              <Suspense fallback={<PageLoader />}>
+                <ProxmoxApiExplorer section="nodes" />
+              </Suspense>
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/tenants/:tenantId/access/*"
+          element={
+            <ProtectedRoute>
+              <Suspense fallback={<PageLoader />}>
+                <ProxmoxApiExplorer section="access" />
+              </Suspense>
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/tenants/:tenantId/pools/*"
+          element={
+            <ProtectedRoute>
+              <Suspense fallback={<PageLoader />}>
+                <ProxmoxApiExplorer section="pools" />
+              </Suspense>
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/tenants/:tenantId/storage/*"
+          element={
+            <ProtectedRoute>
+              <Suspense fallback={<PageLoader />}>
+                <ProxmoxApiExplorer section="storage" />
+              </Suspense>
+            </ProtectedRoute>
+          }
+        />
+        <Route path="*" element={<NotFound />} />
+      </Routes>
+    );
+  }
 
 const App = () => (
   <ErrorBoundary>
