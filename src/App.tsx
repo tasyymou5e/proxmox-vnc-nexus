@@ -1,3 +1,4 @@
+import { lazy, Suspense } from "react";
 import { Toaster } from "@/components/ui/toaster";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -5,26 +6,42 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { AuthProvider, useAuth } from "@/components/auth";
 import { ThemeProvider } from "@/components/theme";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
 import Index from "./pages/Index";
 import Login from "./pages/Login";
-import Dashboard from "./pages/Dashboard";
-import Console from "./pages/Console";
-import Admin from "./pages/Admin";
 import NotFound from "./pages/NotFound";
 import { Loader2 } from "lucide-react";
 
-const queryClient = new QueryClient();
+// Lazy load heavy pages
+const Dashboard = lazy(() => import("./pages/Dashboard"));
+const Console = lazy(() => import("./pages/Console"));
+const Admin = lazy(() => import("./pages/Admin"));
+
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      retry: 2,
+      staleTime: 15000,
+    },
+  },
+});
+
+// Page loading fallback
+function PageLoader() {
+  return (
+    <div className="min-h-screen flex items-center justify-center" role="status">
+      <Loader2 className="h-8 w-8 animate-spin text-primary" />
+      <span className="sr-only">Loading...</span>
+    </div>
+  );
+}
 
 // Protected route wrapper
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth();
 
   if (loading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center">
-        <Loader2 className="h-8 w-8 animate-spin text-primary" />
-      </div>
-    );
+    return <PageLoader />;
   }
 
   if (!user) {
@@ -39,11 +56,7 @@ function PublicRoute({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth();
 
   if (loading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center">
-        <Loader2 className="h-8 w-8 animate-spin text-primary" />
-      </div>
-    );
+    return <PageLoader />;
   }
 
   if (user) {
@@ -69,7 +82,9 @@ function AppRoutes() {
         path="/dashboard"
         element={
           <ProtectedRoute>
-            <Dashboard />
+            <Suspense fallback={<PageLoader />}>
+              <Dashboard />
+            </Suspense>
           </ProtectedRoute>
         }
       />
@@ -77,7 +92,9 @@ function AppRoutes() {
         path="/console/:node/:vmid"
         element={
           <ProtectedRoute>
-            <Console />
+            <Suspense fallback={<PageLoader />}>
+              <Console />
+            </Suspense>
           </ProtectedRoute>
         }
       />
@@ -85,7 +102,9 @@ function AppRoutes() {
         path="/admin"
         element={
           <ProtectedRoute>
-            <Admin />
+            <Suspense fallback={<PageLoader />}>
+              <Admin />
+            </Suspense>
           </ProtectedRoute>
         }
       />
@@ -95,19 +114,21 @@ function AppRoutes() {
 }
 
 const App = () => (
-  <ThemeProvider>
-    <QueryClientProvider client={queryClient}>
-      <TooltipProvider>
-        <Toaster />
-        <Sonner />
-        <BrowserRouter>
-          <AuthProvider>
-            <AppRoutes />
-          </AuthProvider>
-        </BrowserRouter>
-      </TooltipProvider>
-    </QueryClientProvider>
-  </ThemeProvider>
+  <ErrorBoundary>
+    <ThemeProvider>
+      <QueryClientProvider client={queryClient}>
+        <TooltipProvider>
+          <Toaster />
+          <Sonner />
+          <BrowserRouter>
+            <AuthProvider>
+              <AppRoutes />
+            </AuthProvider>
+          </BrowserRouter>
+        </TooltipProvider>
+      </QueryClientProvider>
+    </ThemeProvider>
+  </ErrorBoundary>
 );
 
 export default App;

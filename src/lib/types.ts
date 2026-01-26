@@ -26,6 +26,7 @@ export interface VNCConnection {
   node: string;
   vmid: number;
   vmType: "qemu" | "lxc";
+  relayUrl?: string; // WebSocket URL to the edge function relay
 }
 
 export interface UserProfile {
