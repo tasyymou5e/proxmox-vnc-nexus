@@ -69,7 +69,12 @@ export function useProxmoxServers() {
 
   const updateServer = useCallback(async (
     id: string,
-    updates: Partial<ProxmoxServerInput> & { is_active?: boolean }
+    updates: Partial<ProxmoxServerInput> & { 
+      is_active?: boolean;
+      use_tailscale?: boolean;
+      tailscale_hostname?: string;
+      tailscale_port?: number;
+    }
   ): Promise<ProxmoxServer> => {
     const headers = await getAuthHeaders();
     const response = await fetch(

@@ -17,6 +17,7 @@ export interface ProxmoxCredentials {
   host: string;
   port: string;
   token: string;
+  useTailscale: boolean;
 }
 
 export async function getProxmoxCredentials(
@@ -30,7 +31,7 @@ export async function getProxmoxCredentials(
   if (serverId && encryptionKey) {
     const { data: server, error } = await supabase
       .from("proxmox_servers")
-      .select("host, port, api_token_encrypted, is_active")
+      .select("host, port, api_token_encrypted, is_active, use_tailscale, tailscale_hostname, tailscale_port")
       .eq("id", serverId)
       .eq("user_id", userId)
       .single();
@@ -43,10 +44,18 @@ export async function getProxmoxCredentials(
       throw new Error("Server is disabled");
     }
     
+    // If Tailscale is enabled and hostname is configured, use it
+    const useTailscale = server.use_tailscale && !!server.tailscale_hostname;
+    const effectiveHost = useTailscale ? server.tailscale_hostname : server.host;
+    const effectivePort = useTailscale 
+      ? String(server.tailscale_port || server.port) 
+      : String(server.port);
+    
     return {
-      host: server.host,
-      port: String(server.port),
+      host: effectiveHost,
+      port: effectivePort,
       token: decryptToken(server.api_token_encrypted, encryptionKey),
+      useTailscale,
     };
   }
   
@@ -59,5 +68,5 @@ export async function getProxmoxCredentials(
     throw new Error("Proxmox configuration missing");
   }
   
-  return { host, port, token };
+  return { host, port, token, useTailscale: false };
 }

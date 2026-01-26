@@ -49,7 +49,9 @@ import {
   Upload,
   Circle,
   AlertCircle,
+  Link2,
 } from "lucide-react";
+import { Separator } from "@/components/ui/separator";
 import { formatDistanceToNow } from "date-fns";
 
 function ConnectionStatusBadge({ status, error }: { status: ConnectionStatus; error?: string | null }) {
@@ -135,12 +137,19 @@ export default function ProxmoxServers() {
   const [formLoading, setFormLoading] = useState(false);
 
   // Form state
-  const [formData, setFormData] = useState<ProxmoxServerInput>({
+  const [formData, setFormData] = useState<ProxmoxServerInput & { 
+    use_tailscale?: boolean;
+    tailscale_hostname?: string;
+    tailscale_port?: number;
+  }>({
     name: "",
     host: "",
     port: 8006,
     api_token: "",
     verify_ssl: true,
+    use_tailscale: false,
+    tailscale_hostname: "",
+    tailscale_port: 8006,
   });
 
   useEffect(() => {
@@ -170,6 +179,9 @@ export default function ProxmoxServers() {
       port: 8006,
       api_token: "",
       verify_ssl: true,
+      use_tailscale: false,
+      tailscale_hostname: "",
+      tailscale_port: 8006,
     });
     setEditingServer(null);
   };
@@ -183,6 +195,9 @@ export default function ProxmoxServers() {
         port: server.port,
         api_token: "",
         verify_ssl: server.verify_ssl,
+        use_tailscale: server.use_tailscale || false,
+        tailscale_hostname: server.tailscale_hostname || "",
+        tailscale_port: server.tailscale_port || 8006,
       });
     } else {
       resetForm();
@@ -212,11 +227,18 @@ export default function ProxmoxServers() {
       }
 
       if (editingServer) {
-        const updates: Partial<ProxmoxServerInput> = {
+        const updates: Partial<ProxmoxServerInput> & {
+          use_tailscale?: boolean;
+          tailscale_hostname?: string;
+          tailscale_port?: number;
+        } = {
           name: formData.name,
           host: formData.host,
           port: formData.port,
           verify_ssl: formData.verify_ssl,
+          use_tailscale: formData.use_tailscale,
+          tailscale_hostname: formData.tailscale_hostname,
+          tailscale_port: formData.tailscale_port,
         };
         if (formData.api_token) {
           updates.api_token = formData.api_token;
@@ -449,6 +471,59 @@ export default function ProxmoxServers() {
                         }
                       />
                     </div>
+
+                    {/* Tailscale Section */}
+                    <Separator className="my-2" />
+                    <div className="space-y-3">
+                      <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
+                        <Link2 className="h-4 w-4" />
+                        Tailscale (Optional)
+                      </div>
+                      
+                      <div className="flex items-center justify-between">
+                        <Label htmlFor="use_tailscale">Connect via Tailscale</Label>
+                        <Switch
+                          id="use_tailscale"
+                          checked={formData.use_tailscale || false}
+                          onCheckedChange={(checked) =>
+                            setFormData({ ...formData, use_tailscale: checked })
+                          }
+                        />
+                      </div>
+
+                      {formData.use_tailscale && (
+                        <>
+                          <div className="space-y-2">
+                            <Label htmlFor="tailscale_hostname">Tailscale Hostname/IP</Label>
+                            <Input
+                              id="tailscale_hostname"
+                              placeholder="pve.tailnet-name.ts.net or 100.x.x.x"
+                              value={formData.tailscale_hostname || ""}
+                              onChange={(e) =>
+                                setFormData({ ...formData, tailscale_hostname: e.target.value })
+                              }
+                            />
+                            <p className="text-xs text-muted-foreground">
+                              MagicDNS hostname or Tailscale IP address
+                            </p>
+                          </div>
+                          <div className="space-y-2">
+                            <Label htmlFor="tailscale_port">Tailscale Port</Label>
+                            <Input
+                              id="tailscale_port"
+                              type="number"
+                              placeholder="8006"
+                              value={formData.tailscale_port || 8006}
+                              onChange={(e) =>
+                                setFormData({ ...formData, tailscale_port: parseInt(e.target.value) || 8006 })
+                              }
+                              min={1}
+                              max={65535}
+                            />
+                          </div>
+                        </>
+                      )}
+                    </div>
                   </div>
                   <DialogFooter>
                     <Button type="button" variant="outline" onClick={handleCloseDialog}>
@@ -545,6 +620,14 @@ export default function ProxmoxServers() {
                         <p className="text-sm text-muted-foreground">
                           {server.host}:{server.port}
                         </p>
+                        {server.use_tailscale && server.tailscale_hostname && (
+                          <p className="text-sm text-muted-foreground flex items-center gap-1">
+                            <Link2 className="h-3 w-3" />
+                            <span className="text-primary">
+                              {server.tailscale_hostname}:{server.tailscale_port || 8006}
+                            </span>
+                          </p>
+                        )}
                         <div className="flex items-center gap-2 mt-1 text-xs text-muted-foreground">
                           {server.last_health_check_at ? (
                             <>

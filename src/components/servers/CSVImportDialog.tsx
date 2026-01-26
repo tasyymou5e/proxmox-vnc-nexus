@@ -42,6 +42,9 @@ interface CSVImportDialogProps {
 interface ParsedServer extends ProxmoxServerInput {
   isValid: boolean;
   errors: string[];
+  use_tailscale?: boolean;
+  tailscale_hostname?: string;
+  tailscale_port?: number;
 }
 
 export function CSVImportDialog({ 
@@ -73,9 +76,9 @@ export function CSVImportDialog({
   };
 
   const downloadTemplate = () => {
-    const template = `name,host,port,api_token,verify_ssl
-Production Cluster,pve1.company.com,8006,user@realm!tokenid=uuid-here,true
-Development Server,192.168.1.100,8006,dev@pam!devtoken=uuid-here,false`;
+    const template = `name,host,port,api_token,verify_ssl,use_tailscale,tailscale_hostname,tailscale_port
+Production Cluster,pve1.company.com,8006,user@realm!tokenid=uuid-here,true,false,,
+Development Server,192.168.1.100,8006,dev@pam!devtoken=uuid-here,false,true,pve.tailnet.ts.net,8006`;
     
     const blob = new Blob([template], { type: "text/csv" });
     const url = URL.createObjectURL(blob);
@@ -134,7 +137,7 @@ Development Server,192.168.1.100,8006,dev@pam!devtoken=uuid-here,false`;
         continue; // Skip malformed lines
       }
 
-      const server: Partial<ProxmoxServerInput> = {};
+      const server: Partial<ParsedServer> = {};
       
       headers.forEach((header, index) => {
         const value = values[index]?.trim();
@@ -154,6 +157,15 @@ Development Server,192.168.1.100,8006,dev@pam!devtoken=uuid-here,false`;
           case "verify_ssl":
             server.verify_ssl = value.toLowerCase() !== "false";
             break;
+          case "use_tailscale":
+            server.use_tailscale = value.toLowerCase() === "true";
+            break;
+          case "tailscale_hostname":
+            server.tailscale_hostname = value || undefined;
+            break;
+          case "tailscale_port":
+            server.tailscale_port = parseInt(value) || 8006;
+            break;
         }
       });
 
@@ -165,6 +177,9 @@ Development Server,192.168.1.100,8006,dev@pam!devtoken=uuid-here,false`;
         port: server.port || 8006,
         api_token: server.api_token || "",
         verify_ssl: server.verify_ssl !== false,
+        use_tailscale: server.use_tailscale || false,
+        tailscale_hostname: server.tailscale_hostname,
+        tailscale_port: server.tailscale_port || 8006,
         isValid,
         errors,
       });
@@ -240,7 +255,16 @@ Development Server,192.168.1.100,8006,dev@pam!devtoken=uuid-here,false`;
     setImporting(true);
     try {
       const result = await onImport(
-        validServers.map(({ isValid, errors, ...server }) => server)
+        validServers.map(({ isValid, errors, ...server }) => ({
+          name: server.name,
+          host: server.host,
+          port: server.port,
+          api_token: server.api_token,
+          verify_ssl: server.verify_ssl,
+          use_tailscale: server.use_tailscale,
+          tailscale_hostname: server.tailscale_hostname,
+          tailscale_port: server.tailscale_port,
+        }))
       );
       setImportResult(result);
       
@@ -268,7 +292,7 @@ Development Server,192.168.1.100,8006,dev@pam!devtoken=uuid-here,false`;
           </DialogTitle>
           <DialogDescription>
             Upload a CSV file with your server details. Required columns: name, host, api_token.
-            Optional: port (default: 8006), verify_ssl (default: true).
+            Optional: port, verify_ssl, use_tailscale, tailscale_hostname, tailscale_port.
           </DialogDescription>
         </DialogHeader>
 
@@ -356,7 +380,7 @@ Development Server,192.168.1.100,8006,dev@pam!devtoken=uuid-here,false`;
                       <TableHead>Name</TableHead>
                       <TableHead>Host</TableHead>
                       <TableHead>Port</TableHead>
-                      <TableHead>SSL</TableHead>
+                      <TableHead>Tailscale</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -377,7 +401,13 @@ Development Server,192.168.1.100,8006,dev@pam!devtoken=uuid-here,false`;
                         <TableCell className="font-medium">{server.name || "-"}</TableCell>
                         <TableCell>{server.host || "-"}</TableCell>
                         <TableCell>{server.port}</TableCell>
-                        <TableCell>{server.verify_ssl ? "Yes" : "No"}</TableCell>
+                        <TableCell>
+                          {server.use_tailscale ? (
+                            <span className="text-primary text-xs">{server.tailscale_hostname || "Yes"}</span>
+                          ) : (
+                            <span className="text-muted-foreground">No</span>
+                          )}
+                        </TableCell>
                       </TableRow>
                     ))}
                   </TableBody>

@@ -90,7 +90,10 @@ export type Database = {
           last_health_check_at: string | null
           name: string
           port: number
+          tailscale_hostname: string | null
+          tailscale_port: number | null
           updated_at: string | null
+          use_tailscale: boolean | null
           user_id: string
           verify_ssl: boolean | null
         }
@@ -106,7 +109,10 @@ export type Database = {
           last_health_check_at?: string | null
           name: string
           port?: number
+          tailscale_hostname?: string | null
+          tailscale_port?: number | null
           updated_at?: string | null
+          use_tailscale?: boolean | null
           user_id: string
           verify_ssl?: boolean | null
         }
@@ -122,7 +128,10 @@ export type Database = {
           last_health_check_at?: string | null
           name?: string
           port?: number
+          tailscale_hostname?: string | null
+          tailscale_port?: number | null
           updated_at?: string | null
+          use_tailscale?: boolean | null
           user_id?: string
           verify_ssl?: boolean | null
         }
