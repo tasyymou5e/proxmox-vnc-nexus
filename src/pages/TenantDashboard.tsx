@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { useParams, Link, useNavigate } from "react-router-dom";
 import { TenantLayout } from "@/components/layout/TenantLayout";
 import { useTenant } from "@/hooks/useTenants";
@@ -9,9 +10,10 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
-import { VMQuickActions } from "@/components/dashboard/VMQuickActions";
+import { VMQuickActions, VMDetailsModal } from "@/components/dashboard";
 import { ServerComparisonView, ConnectionHealthAlerts } from "@/components/servers";
 import { useNodes } from "@/hooks/useProxmoxApi";
+import type { VM } from "@/lib/types";
 import { 
   Server, 
   Monitor, 
@@ -153,6 +155,10 @@ export default function TenantDashboard() {
   const { data: nodes, isLoading: isNodesLoading } = useNodes(tenantId);
   const { vms, isLoading: isVMsLoading, performAction, isPerformingAction } = useTenantVMs(tenantId);
 
+  // State for VM details modal
+  const [selectedVM, setSelectedVM] = useState<VM | null>(null);
+  const [isModalOpen, setIsModalOpen] = useState(false);
+
   const nodesData = nodes?.data || [];
   const lastUpdated = dataUpdatedAt ? new Date(dataUpdatedAt).toLocaleTimeString() : null;
 
@@ -160,6 +166,24 @@ export default function TenantDashboard() {
   const recentVMs = vms
     .filter(vm => !vm.template && (vm.status === 'running' || vm.status === 'stopped'))
     .slice(0, 5);
+
+  const handleVMClick = (vm: VM) => {
+    setSelectedVM(vm);
+    setIsModalOpen(true);
+  };
+
+  const handleVMAction = async (action: "start" | "stop" | "reset") => {
+    if (!selectedVM) return;
+    await performAction({
+      vmid: selectedVM.vmid,
+      node: selectedVM.node,
+      action,
+      vmType: selectedVM.type,
+      vmName: selectedVM.name,
+      serverId: selectedVM.serverId,
+      serverName: selectedVM.serverName,
+    });
+  };
 
   return (
     <TenantLayout>
@@ -322,6 +346,7 @@ export default function TenantDashboard() {
                     }}
                     isPerformingAction={isPerformingAction}
                     canManage={canManageVMs}
+                    onClick={() => handleVMClick(vm)}
                   />
                 ))}
               </div>
@@ -489,6 +514,16 @@ export default function TenantDashboard() {
           </div>
         </div>
       </div>
+
+      {/* VM Details Modal */}
+      <VMDetailsModal
+        vm={selectedVM}
+        open={isModalOpen}
+        onOpenChange={setIsModalOpen}
+        onAction={handleVMAction}
+        isPerformingAction={isPerformingAction}
+        canManage={canManageVMs}
+      />
     </TenantLayout>
   );
 }
