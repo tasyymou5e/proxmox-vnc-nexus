@@ -307,6 +307,8 @@ export default function Admin() {
                   <TableRow>
                     <TableHead>Email</TableHead>
                     <TableHead>Name</TableHead>
+                    <TableHead>Username</TableHead>
+                    <TableHead>Company</TableHead>
                     <TableHead>Role</TableHead>
                     <TableHead>Joined</TableHead>
                     <TableHead className="text-right">Actions</TableHead>
@@ -317,6 +319,8 @@ export default function Admin() {
                     <TableRow key={user.id}>
                       <TableCell className="font-medium">{user.email}</TableCell>
                       <TableCell>{user.full_name || "-"}</TableCell>
+                      <TableCell className="font-mono text-sm">{user.username || "-"}</TableCell>
+                      <TableCell>{user.company_name || "-"}</TableCell>
                       <TableCell>
                         <Badge
                           variant={user.role === "admin" ? "default" : "secondary"}
