@@ -86,6 +86,9 @@ export interface ProxmoxServer {
   connection_status: ConnectionStatus;
   last_health_check_at: string | null;
   health_check_error: string | null;
+  use_tailscale: boolean;
+  tailscale_hostname: string | null;
+  tailscale_port: number;
 }
 
 export interface ProxmoxServerInput {
@@ -94,6 +97,9 @@ export interface ProxmoxServerInput {
   port: number;
   api_token: string;
   verify_ssl?: boolean;
+  use_tailscale?: boolean;
+  tailscale_hostname?: string;
+  tailscale_port?: number;
 }
 
 export interface HealthCheckResult {
