@@ -133,3 +133,75 @@
     background-color: hsl(var(--muted-foreground) / 0.5);
   }
 }
+
+/* Code syntax highlighting (GitHub-inspired dark theme) */
+.hljs {
+  color: hsl(var(--foreground));
+  background: transparent;
+}
+
+.hljs-comment,
+.hljs-quote {
+  color: hsl(var(--muted-foreground));
+  font-style: italic;
+}
+
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-addition {
+  color: hsl(280 100% 70%);
+}
+
+.hljs-number,
+.hljs-string,
+.hljs-meta .hljs-meta-string,
+.hljs-literal,
+.hljs-doctag,
+.hljs-regexp {
+  color: hsl(142 76% 50%);
+}
+
+.hljs-title,
+.hljs-section,
+.hljs-name,
+.hljs-selector-id,
+.hljs-selector-class {
+  color: hsl(217 91% 65%);
+}
+
+.hljs-attribute,
+.hljs-attr,
+.hljs-variable,
+.hljs-template-variable,
+.hljs-class .hljs-title,
+.hljs-type {
+  color: hsl(38 92% 60%);
+}
+
+.hljs-symbol,
+.hljs-bullet,
+.hljs-subst,
+.hljs-meta,
+.hljs-meta .hljs-keyword,
+.hljs-selector-attr,
+.hljs-selector-pseudo,
+.hljs-link {
+  color: hsl(340 80% 65%);
+}
+
+.hljs-built_in,
+.hljs-deletion {
+  color: hsl(0 84% 65%);
+}
+
+.hljs-formula {
+  background: hsl(var(--muted));
+}
+
+.hljs-emphasis {
+  font-style: italic;
+}
+
+.hljs-strong {
+  font-weight: bold;
+}
