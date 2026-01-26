@@ -5,7 +5,8 @@ import { Progress } from "@/components/ui/progress";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useConnectionHistory } from "@/hooks/useConnectionHistory";
+import { useQuery } from "@tanstack/react-query";
+import { supabase } from "@/integrations/supabase/client";
 import { 
   BarChart, 
   Bar, 
@@ -36,12 +37,34 @@ interface ServerData {
 }
 
 interface ServerComparisonViewProps {
-  servers: ServerData[];
+  tenantId?: string;
+  servers?: ServerData[];
   isLoading?: boolean;
 }
 
-export function ServerComparisonView({ servers, isLoading }: ServerComparisonViewProps) {
+export function ServerComparisonView({ tenantId, servers: propServers, isLoading: propIsLoading }: ServerComparisonViewProps) {
   const [selectedServers, setSelectedServers] = useState<string[]>([]);
+
+  // Fetch servers if tenantId is provided but servers are not
+  const { data: fetchedServers, isLoading: isFetching } = useQuery({
+    queryKey: ["server-comparison", tenantId],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("proxmox_servers")
+        .select("id, name, connection_status, success_rate, avg_response_time_ms, last_health_check_at")
+        .eq("tenant_id", tenantId!)
+        .eq("is_active", true)
+        .order("name");
+      
+      if (error) throw error;
+      return data as ServerData[];
+    },
+    enabled: !!tenantId && !propServers,
+    refetchInterval: 30000,
+  });
+
+  const servers = propServers || fetchedServers || [];
+  const isLoading = propIsLoading ?? (!!tenantId && !propServers && isFetching);
   
   // Auto-select first 4 servers if none selected
   const displayServers = useMemo(() => {

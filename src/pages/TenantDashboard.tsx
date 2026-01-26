@@ -10,6 +10,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { VMQuickActions } from "@/components/dashboard/VMQuickActions";
+import { ServerComparisonView, ConnectionHealthAlerts } from "@/components/servers";
 import { useNodes } from "@/hooks/useProxmoxApi";
 import { 
   Server, 
@@ -26,7 +27,8 @@ import {
   StopCircle,
   ArrowLeft,
   Settings,
-  MonitorPlay
+  MonitorPlay,
+  BarChart3
 } from "lucide-react";
 
 function StatCard({ 
@@ -443,6 +445,22 @@ export default function TenantDashboard() {
             </div>
           )}
         </div>
+
+        {/* Connection Health Alerts */}
+        {tenantId && (
+          <ConnectionHealthAlerts tenantId={tenantId} />
+        )}
+
+        {/* Server Comparison */}
+        {tenantId && (
+          <div>
+            <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
+              <BarChart3 className="h-5 w-5" />
+              Server Comparison
+            </h2>
+            <ServerComparisonView tenantId={tenantId} />
+          </div>
+        )}
 
         {/* Quick Actions */}
         <div>
