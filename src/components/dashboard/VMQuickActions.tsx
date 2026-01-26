@@ -13,7 +13,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import { Play, Square, RotateCcw, Loader2, Monitor, Link2, Terminal } from "lucide-react";
+import { Play, Square, RotateCcw, Loader2, Monitor, Link2, Terminal, BarChart2 } from "lucide-react";
 import type { VM } from "@/lib/types";
 
 interface VMQuickActionsProps {
@@ -33,6 +33,12 @@ export function VMQuickActions({ vm, onAction, isPerformingAction, canManage }: 
 
   const handleOpenConsole = () => {
     navigate(`/console/${vm.node}/${vm.vmid}?type=${vm.type}${vm.serverId ? `&serverId=${vm.serverId}` : ''}`);
+  };
+
+  const handleOpenMonitoring = () => {
+    if (vm.serverId) {
+      navigate(`/vm/${vm.serverId}/${vm.node}/${vm.vmid}/monitoring?type=${vm.type}&name=${encodeURIComponent(vm.name || `VM ${vm.vmid}`)}`);
+    }
   };
   
   const handleAction = async (action: "start" | "stop" | "reset") => {
@@ -92,13 +98,32 @@ export function VMQuickActions({ vm, onAction, isPerformingAction, canManage }: 
         
         {canManage && (
           <div className="flex items-center gap-1">
+            {/* Monitoring button - always visible when serverId exists */}
+            {vm.serverId && (
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      onClick={handleOpenMonitoring}
+                      className="text-muted-foreground hover:text-foreground hover:bg-muted"
+                    >
+                      <BarChart2 className="h-4 w-4" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>View Monitoring</TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+            )}
+            
             {isStopped ? (
               <Button
                 variant="ghost"
                 size="sm"
                 onClick={() => handleAction("start")}
                 disabled={isLoading}
-                className="text-green-600 hover:text-green-700 hover:bg-green-100 dark:hover:bg-green-900/30"
+                className="text-emerald-600 hover:text-emerald-700 hover:bg-emerald-500/10"
               >
                 {isLoading ? (
                   <Loader2 className="h-4 w-4 animate-spin" />
@@ -152,7 +177,7 @@ export function VMQuickActions({ vm, onAction, isPerformingAction, canManage }: 
                         size="icon"
                         onClick={() => handleAction("reset")}
                         disabled={isLoading}
-                        className="text-orange-600 hover:text-orange-700 hover:bg-orange-100 dark:hover:bg-orange-900/30"
+                        className="text-amber-600 hover:text-amber-700 hover:bg-amber-500/10"
                       >
                         <RotateCcw className="h-4 w-4" />
                       </Button>
