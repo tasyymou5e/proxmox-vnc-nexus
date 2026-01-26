@@ -11,7 +11,8 @@ import { useTenantSettings } from "@/hooks/useTenantSettings";
 import { useTenantPermissions } from "@/hooks/useTenantPermissions";
 import { useLogoUpload } from "@/hooks/useLogoUpload";
 import { toast } from "@/hooks/use-toast";
-import { Palette, Bell, Settings, Save, Loader2, Upload, Trash2, Image } from "lucide-react";
+import { Slider } from "@/components/ui/slider";
+import { Palette, Bell, Settings, Save, Loader2, Upload, Trash2, Image, AlertTriangle } from "lucide-react";
 import type { TenantSettings as TenantSettingsType } from "@/lib/types";
 
 export default function TenantSettings() {
@@ -39,6 +40,9 @@ export default function TenantSettings() {
         default_connection_timeout: settings.default_connection_timeout,
         default_verify_ssl: settings.default_verify_ssl,
         auto_health_check_interval: settings.auto_health_check_interval,
+        alert_success_rate_threshold: settings.alert_success_rate_threshold,
+        alert_latency_threshold_ms: settings.alert_latency_threshold_ms,
+        alert_offline_duration_seconds: settings.alert_offline_duration_seconds,
       });
     }
   }, [settings]);
@@ -410,6 +414,80 @@ export default function TenantSettings() {
                   onChange={(e) => handleChange("auto_health_check_interval", parseInt(e.target.value) * 60000)}
                   disabled={!canManageSettings}
                 />
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Alert Thresholds Card */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <AlertTriangle className="h-5 w-5" />
+                Alert Thresholds
+              </CardTitle>
+              <CardDescription>
+                Configure when health alerts should trigger
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              <div className="space-y-4">
+                <div className="flex items-center justify-between">
+                  <Label>Success Rate Threshold</Label>
+                  <span className="text-sm font-medium tabular-nums">
+                    {formData.alert_success_rate_threshold ?? 80}%
+                  </span>
+                </div>
+                <Slider
+                  value={[formData.alert_success_rate_threshold ?? 80]}
+                  onValueChange={([value]) => handleChange("alert_success_rate_threshold", value)}
+                  min={50}
+                  max={100}
+                  step={5}
+                  disabled={!canManageSettings}
+                />
+                <p className="text-xs text-muted-foreground">
+                  Alert when server success rate drops below this percentage
+                </p>
+              </div>
+
+              <div className="space-y-4">
+                <div className="flex items-center justify-between">
+                  <Label>Latency Threshold</Label>
+                  <span className="text-sm font-medium tabular-nums">
+                    {formData.alert_latency_threshold_ms ?? 500}ms
+                  </span>
+                </div>
+                <Slider
+                  value={[formData.alert_latency_threshold_ms ?? 500]}
+                  onValueChange={([value]) => handleChange("alert_latency_threshold_ms", value)}
+                  min={100}
+                  max={5000}
+                  step={100}
+                  disabled={!canManageSettings}
+                />
+                <p className="text-xs text-muted-foreground">
+                  Alert when average response time exceeds this value
+                </p>
+              </div>
+
+              <div className="space-y-4">
+                <div className="flex items-center justify-between">
+                  <Label>Offline Duration</Label>
+                  <span className="text-sm font-medium tabular-nums">
+                    {formData.alert_offline_duration_seconds ?? 60}s
+                  </span>
+                </div>
+                <Slider
+                  value={[formData.alert_offline_duration_seconds ?? 60]}
+                  onValueChange={([value]) => handleChange("alert_offline_duration_seconds", value)}
+                  min={10}
+                  max={300}
+                  step={10}
+                  disabled={!canManageSettings}
+                />
+                <p className="text-xs text-muted-foreground">
+                  Only alert if server is offline for at least this duration
+                </p>
               </div>
             </CardContent>
           </Card>
