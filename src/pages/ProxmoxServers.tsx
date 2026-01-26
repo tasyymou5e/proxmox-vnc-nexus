@@ -34,7 +34,8 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { useProxmoxServers } from "@/hooks/useProxmoxServers";
-import { CSVImportDialog } from "@/components/servers/CSVImportDialog";
+import { CSVImportDialog, TailscaleFunnelHelp } from "@/components/servers";
+import { Slider } from "@/components/ui/slider";
 import type { ProxmoxServer, ProxmoxServerInput, ConnectionStatus } from "@/lib/types";
 import {
   Plus,
@@ -50,6 +51,7 @@ import {
   Circle,
   AlertCircle,
   Link2,
+  ExternalLink,
 } from "lucide-react";
 import { Separator } from "@/components/ui/separator";
 import { formatDistanceToNow } from "date-fns";
@@ -146,6 +148,7 @@ export default function ProxmoxServers({ tenantId, hideLayout }: ProxmoxServersP
     use_tailscale?: boolean;
     tailscale_hostname?: string;
     tailscale_port?: number;
+    connection_timeout?: number;
   }>({
     name: "",
     host: "",
@@ -155,6 +158,7 @@ export default function ProxmoxServers({ tenantId, hideLayout }: ProxmoxServersP
     use_tailscale: false,
     tailscale_hostname: "",
     tailscale_port: 8006,
+    connection_timeout: 10,
   });
 
   useEffect(() => {
@@ -187,6 +191,7 @@ export default function ProxmoxServers({ tenantId, hideLayout }: ProxmoxServersP
       use_tailscale: false,
       tailscale_hostname: "",
       tailscale_port: 8006,
+      connection_timeout: 10,
     });
     setEditingServer(null);
   };
@@ -203,6 +208,7 @@ export default function ProxmoxServers({ tenantId, hideLayout }: ProxmoxServersP
         use_tailscale: server.use_tailscale || false,
         tailscale_hostname: server.tailscale_hostname || "",
         tailscale_port: server.tailscale_port || 8006,
+        connection_timeout: (server.connection_timeout || 10000) / 1000, // Convert ms to seconds for UI
       });
     } else {
       resetForm();
@@ -236,6 +242,7 @@ export default function ProxmoxServers({ tenantId, hideLayout }: ProxmoxServersP
           use_tailscale?: boolean;
           tailscale_hostname?: string;
           tailscale_port?: number;
+          connection_timeout?: number;
         } = {
           name: formData.name,
           host: formData.host,
@@ -244,6 +251,7 @@ export default function ProxmoxServers({ tenantId, hideLayout }: ProxmoxServersP
           use_tailscale: formData.use_tailscale,
           tailscale_hostname: formData.tailscale_hostname,
           tailscale_port: formData.tailscale_port,
+          connection_timeout: (formData.connection_timeout || 10) * 1000, // Convert seconds to ms
         };
         if (formData.api_token) {
           updates.api_token = formData.api_token;
@@ -254,7 +262,10 @@ export default function ProxmoxServers({ tenantId, hideLayout }: ProxmoxServersP
           description: `${formData.name} has been updated successfully.`,
         });
       } else {
-        await createServer(formData);
+        await createServer({
+          ...formData,
+          connection_timeout: (formData.connection_timeout || 10) * 1000, // Convert seconds to ms
+        });
         toast({
           title: "Server added",
           description: `${formData.name} has been added successfully.`,
@@ -530,8 +541,37 @@ export default function ProxmoxServers({ tenantId, hideLayout }: ProxmoxServersP
                               max={65535}
                             />
                           </div>
+                          
+                          {/* Tailscale Funnel Help */}
+                          <TailscaleFunnelHelp />
                         </>
                       )}
+
+                      {/* Connection Timeout - shown when Tailscale is enabled, or can be set anytime */}
+                      <Separator className="my-2" />
+                      <div className="space-y-3">
+                        <div className="flex items-center justify-between">
+                          <Label htmlFor="connection_timeout">
+                            Connection Timeout: {formData.connection_timeout || 10}s
+                          </Label>
+                        </div>
+                        <Slider
+                          id="connection_timeout"
+                          value={[formData.connection_timeout || 10]}
+                          onValueChange={(value) =>
+                            setFormData({ ...formData, connection_timeout: value[0] })
+                          }
+                          min={5}
+                          max={120}
+                          step={5}
+                          className="w-full"
+                        />
+                        <p className="text-xs text-muted-foreground">
+                          {formData.use_tailscale 
+                            ? "Tailscale connections may need 30-60 seconds due to relay latency"
+                            : "Direct connections typically work with 10-15 seconds"}
+                        </p>
+                      </div>
                     </div>
                   </div>
                   <DialogFooter>
@@ -625,17 +665,28 @@ export default function ProxmoxServers({ tenantId, hideLayout }: ProxmoxServersP
                             status={server.connection_status} 
                             error={server.health_check_error} 
                           />
+                          {server.use_tailscale && server.tailscale_hostname?.includes('.ts.net') && (
+                            <Badge variant="outline" className="text-xs text-accent-foreground border-accent">
+                              <ExternalLink className="h-3 w-3 mr-1" />
+                              Funnel
+                            </Badge>
+                          )}
                         </div>
                         <p className="text-sm text-muted-foreground">
                           {server.host}:{server.port}
                         </p>
                         {server.use_tailscale && server.tailscale_hostname && (
-                          <p className="text-sm text-muted-foreground flex items-center gap-1">
-                            <Link2 className="h-3 w-3" />
-                            <span className="text-primary">
-                              {server.tailscale_hostname}:{server.tailscale_port || 8006}
+                          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                            <div className="flex items-center gap-1">
+                              <Link2 className="h-3 w-3" />
+                              <span className="text-primary">
+                                {server.tailscale_hostname}:{server.tailscale_port || 8006}
+                              </span>
+                            </div>
+                            <span className="text-xs">
+                              ({(server.connection_timeout || 10000) / 1000}s timeout)
                             </span>
-                          </p>
+                          </div>
                         )}
                         <div className="flex items-center gap-2 mt-1 text-xs text-muted-foreground">
                           {server.last_health_check_at ? (

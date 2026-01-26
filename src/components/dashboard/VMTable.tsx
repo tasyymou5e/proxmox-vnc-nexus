@@ -9,11 +9,12 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { VMStatusBadge } from "./VMStatusBadge";
 import { useVMAction } from "@/hooks/useVMs";
 import { toast } from "@/hooks/use-toast";
 import type { VM } from "@/lib/types";
-import { Monitor, Play, Square, RotateCcw, Loader2 } from "lucide-react";
+import { Monitor, Play, Square, RotateCcw, Loader2, Link2 } from "lucide-react";
 
 interface VMTableProps {
   vms: VM[];
@@ -94,7 +95,23 @@ export function VMTable({ vms }: VMTableProps) {
                 <TableRow key={`${vm.serverId || 'default'}-${vm.node}-${vm.vmid}`}>
                   <TableCell className="font-mono text-sm">{vm.vmid}</TableCell>
                   <TableCell className="font-medium">{vm.name || "-"}</TableCell>
-                  <TableCell className="text-muted-foreground">{vm.serverName || "-"}</TableCell>
+                  <TableCell className="text-muted-foreground">
+                    <div className="flex items-center gap-1">
+                      {vm.serverName || "-"}
+                      {vm.useTailscale && (
+                        <TooltipProvider>
+                          <Tooltip>
+                            <TooltipTrigger>
+                              <Link2 className="h-3 w-3 text-primary" />
+                            </TooltipTrigger>
+                            <TooltipContent>
+                              <p>Tailscale: {vm.tailscaleHostname || "Enabled"}</p>
+                            </TooltipContent>
+                          </Tooltip>
+                        </TooltipProvider>
+                      )}
+                    </div>
+                  </TableCell>
                   <TableCell>{vm.node}</TableCell>
                   <TableCell className="uppercase text-xs">{vm.type}</TableCell>
                 <TableCell>

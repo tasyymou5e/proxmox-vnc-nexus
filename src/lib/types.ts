@@ -15,6 +15,8 @@ export interface VM {
   permissions?: string[];
   serverId?: string;
   serverName?: string;
+  useTailscale?: boolean;
+  tailscaleHostname?: string;
 }
 
 export interface VNCConnection {
@@ -89,6 +91,7 @@ export interface ProxmoxServer {
   use_tailscale: boolean;
   tailscale_hostname: string | null;
   tailscale_port: number;
+  connection_timeout: number;
 }
 
 export interface ProxmoxServerInput {
@@ -100,6 +103,7 @@ export interface ProxmoxServerInput {
   use_tailscale?: boolean;
   tailscale_hostname?: string;
   tailscale_port?: number;
+  connection_timeout?: number;
 }
 
 export interface HealthCheckResult {

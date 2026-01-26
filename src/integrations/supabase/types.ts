@@ -129,6 +129,7 @@ export type Database = {
         Row: {
           api_token_encrypted: string
           connection_status: string | null
+          connection_timeout: number | null
           created_at: string | null
           health_check_error: string | null
           host: string
@@ -149,6 +150,7 @@ export type Database = {
         Insert: {
           api_token_encrypted: string
           connection_status?: string | null
+          connection_timeout?: number | null
           created_at?: string | null
           health_check_error?: string | null
           host: string
@@ -169,6 +171,7 @@ export type Database = {
         Update: {
           api_token_encrypted?: string
           connection_status?: string | null
+          connection_timeout?: number | null
           created_at?: string | null
           health_check_error?: string | null
           host?: string

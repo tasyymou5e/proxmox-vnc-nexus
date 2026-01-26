@@ -87,9 +87,10 @@ Deno.serve(async (req) => {
     let proxmoxHost: string;
     let proxmoxPort: string;
     let proxmoxToken: string;
+    let credentials: { host: string; port: string; token: string; timeout: number };
 
     try {
-      const credentials = await getProxmoxCredentials(supabase, userId, serverId);
+      credentials = await getProxmoxCredentials(supabase, userId, serverId);
       proxmoxHost = credentials.host;
       proxmoxPort = credentials.port;
       proxmoxToken = credentials.token;
@@ -102,6 +103,7 @@ Deno.serve(async (req) => {
 
     // Get VNC proxy ticket from Proxmox
     const vncProxyUrl = `https://${proxmoxHost}:${proxmoxPort}/api2/json/nodes/${node}/${vmType}/${vmid}/vncproxy`;
+    const timeout = credentials.timeout || 10000;
     
     const vncResponse = await fetch(vncProxyUrl, {
       method: "POST",
@@ -110,6 +112,7 @@ Deno.serve(async (req) => {
         "Content-Type": "application/x-www-form-urlencoded",
       },
       body: "websocket=1",
+      signal: AbortSignal.timeout(timeout),
     });
 
     const vncData = await vncResponse.json();
