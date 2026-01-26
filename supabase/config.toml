@@ -15,5 +15,8 @@ verify_jwt = false
 [functions.vnc-relay]
 verify_jwt = false
 
+[functions.delete-user]
+verify_jwt = false
+
 [edge_runtime]
 policy = "per_worker"
