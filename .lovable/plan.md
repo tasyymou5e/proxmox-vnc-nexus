@@ -1,590 +1,401 @@
 
-# Comprehensive Proxmox API Explorer with Multi-Tenancy
+
+# Tailscale Enhancement: Timeout Settings, Funnel Support & Connection Indicators
 
 ## Overview
 
-This plan implements a complete Proxmox API management interface that mirrors the official Proxmox API structure, adding multi-tenancy (company/tenant) support, and a hierarchical tree navigation menu. The system will allow admins to manage multiple tenants, each with their own Proxmox servers and configurations.
+This plan implements three interconnected Tailscale-related features:
+
+1. **Connection Timeout Settings per Server** - Configurable timeout values for high-latency Tailscale connections
+2. **Tailscale Funnel Documentation & Support** - In-app documentation and UI hints for Funnel configuration
+3. **Tailscale Connection Indicator on VM Cards** - Visual indicator showing when VMs are accessed via Tailscale
 
 ---
 
-## Architecture Overview
+## Feature 1: Connection Timeout Settings per Server
 
-```text
-+-------------------------------------------------------------+
-|                     Admin Login                              |
-+-------------------------------------------------------------+
-                           |
-                           v
-+-------------------------------------------------------------+
-|              Tenant/Company Selector                        |
-|  +------------------+  +------------------+                 |
-|  | ACME Corp        |  | TechStart Inc   |                 |
-|  | 5 servers, 24 VMs|  | 2 servers, 8 VMs|                 |
-|  +------------------+  +------------------+                 |
-+-------------------------------------------------------------+
-                           |
-                           v
-+-------------------------------------------------------------+
-|                   Tenant Dashboard                           |
-+------------------+------------------------------------------+
-|  Tree Menu       |  Main Content Area                       |
-|  +-----------+   |  +------------------------------------+  |
-|  | Cluster   |   |  | Environment Overview               |  |
-|  |  +--Config|   |  | - Nodes: 3                         |  |
-|  |  +--Status|   |  | - VMs: 24 running, 5 stopped       |  |
-|  |  +--Tasks |   |  | - Storage: 2.4TB / 10TB            |  |
-|  | Nodes     |   |  | - CPU: 45% avg                     |  |
-|  |  +--pve1  |   |  +------------------------------------+  |
-|  |  +--pve2  |   |                                          |
-|  | Access    |   |                                          |
-|  | Storage   |   |                                          |
-|  | Pools     |   |                                          |
-|  +-----------+   |                                          |
-+------------------+------------------------------------------+
-```
+### 1.1 Database Schema Update
 
----
+Add a `connection_timeout` column to store custom timeout values:
 
-## Part 1: Database Schema - Multi-Tenancy Support
-
-### New Tables
-
-#### 1.1 Tenants Table
-```sql
-CREATE TABLE public.tenants (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  name text NOT NULL,
-  slug text UNIQUE NOT NULL,
-  description text,
-  logo_url text,
-  is_active boolean DEFAULT true,
-  created_at timestamptz DEFAULT now(),
-  updated_at timestamptz DEFAULT now(),
-  created_by uuid REFERENCES auth.users(id)
-);
-
--- Enable RLS
-ALTER TABLE public.tenants ENABLE ROW LEVEL SECURITY;
-```
-
-#### 1.2 User-Tenant Assignments
-```sql
-CREATE TABLE public.user_tenant_assignments (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
-  tenant_id uuid NOT NULL REFERENCES public.tenants(id) ON DELETE CASCADE,
-  role text NOT NULL DEFAULT 'viewer', -- admin, manager, viewer
-  created_at timestamptz DEFAULT now(),
-  UNIQUE(user_id, tenant_id)
-);
-
--- Enable RLS
-ALTER TABLE public.user_tenant_assignments ENABLE ROW LEVEL SECURITY;
-```
-
-#### 1.3 Update proxmox_servers to Link to Tenants
 ```sql
 ALTER TABLE public.proxmox_servers 
-ADD COLUMN IF NOT EXISTS tenant_id uuid REFERENCES public.tenants(id) ON DELETE CASCADE;
+ADD COLUMN IF NOT EXISTS connection_timeout integer DEFAULT 10000;
 
--- Create index for tenant queries
-CREATE INDEX IF NOT EXISTS idx_proxmox_servers_tenant ON public.proxmox_servers(tenant_id);
+-- connection_timeout is in milliseconds (default: 10 seconds)
+-- Tailscale connections may need 30-60 seconds
 ```
 
-#### 1.4 Proxmox API Config Storage
-```sql
-CREATE TABLE public.proxmox_api_configs (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  tenant_id uuid NOT NULL REFERENCES public.tenants(id) ON DELETE CASCADE,
-  server_id uuid NOT NULL REFERENCES public.proxmox_servers(id) ON DELETE CASCADE,
-  config_path text NOT NULL, -- e.g., "/cluster/options", "/access/domains"
-  config_data jsonb NOT NULL DEFAULT '{}',
-  last_synced_at timestamptz,
-  created_at timestamptz DEFAULT now(),
-  updated_at timestamptz DEFAULT now(),
-  UNIQUE(server_id, config_path)
-);
-
--- Enable RLS
-ALTER TABLE public.proxmox_api_configs ENABLE ROW LEVEL SECURITY;
-```
-
----
-
-## Part 2: Proxmox API Tree Structure Definition
-
-### 2.1 API Menu Configuration
-
-**File: `src/config/proxmoxApiTree.ts`**
-
-```typescript
-export interface ApiEndpoint {
-  path: string;
-  label: string;
-  description?: string;
-  methods: ('GET' | 'POST' | 'PUT' | 'DELETE')[];
-  isConfig: boolean; // true = can edit, false = view only
-  icon?: string;
-  children?: ApiEndpoint[];
-  parameters?: ApiParameter[];
-}
-
-export interface ApiParameter {
-  name: string;
-  type: 'string' | 'integer' | 'boolean' | 'enum' | 'object';
-  required: boolean;
-  description?: string;
-  enumValues?: string[];
-  default?: unknown;
-}
-
-export const PROXMOX_API_TREE: ApiEndpoint[] = [
-  {
-    path: '/cluster',
-    label: 'Cluster',
-    description: 'Cluster-wide configuration and status',
-    methods: ['GET'],
-    isConfig: false,
-    children: [
-      {
-        path: '/cluster/config',
-        label: 'Config',
-        methods: ['GET', 'POST'],
-        isConfig: true,
-        children: [
-          { path: '/cluster/config/nodes', label: 'Nodes', methods: ['GET'], isConfig: false },
-          { path: '/cluster/config/join', label: 'Join', methods: ['GET', 'POST'], isConfig: true },
-          { path: '/cluster/config/totem', label: 'Totem', methods: ['GET'], isConfig: false },
-          { path: '/cluster/config/qdevice', label: 'QDevice', methods: ['GET'], isConfig: false },
-        ]
-      },
-      {
-        path: '/cluster/firewall',
-        label: 'Firewall',
-        methods: ['GET'],
-        isConfig: false,
-        children: [
-          { path: '/cluster/firewall/groups', label: 'Security Groups', methods: ['GET', 'POST'], isConfig: true },
-          { path: '/cluster/firewall/rules', label: 'Rules', methods: ['GET', 'POST'], isConfig: true },
-          { path: '/cluster/firewall/aliases', label: 'Aliases', methods: ['GET', 'POST'], isConfig: true },
-          { path: '/cluster/firewall/ipset', label: 'IP Sets', methods: ['GET', 'POST'], isConfig: true },
-          { path: '/cluster/firewall/options', label: 'Options', methods: ['GET', 'PUT'], isConfig: true },
-          { path: '/cluster/firewall/macros', label: 'Macros', methods: ['GET'], isConfig: false },
-          { path: '/cluster/firewall/refs', label: 'References', methods: ['GET'], isConfig: false },
-        ]
-      },
-      {
-        path: '/cluster/ha',
-        label: 'HA',
-        methods: ['GET'],
-        isConfig: false,
-        children: [
-          { path: '/cluster/ha/resources', label: 'Resources', methods: ['GET', 'POST'], isConfig: true },
-          { path: '/cluster/ha/groups', label: 'Groups', methods: ['GET', 'POST'], isConfig: true },
-          { path: '/cluster/ha/status', label: 'Status', methods: ['GET'], isConfig: false },
-        ]
-      },
-      { path: '/cluster/backup', label: 'Backup', methods: ['GET', 'POST'], isConfig: true },
-      { path: '/cluster/backup-info', label: 'Backup Info', methods: ['GET'], isConfig: false },
-      { path: '/cluster/replication', label: 'Replication', methods: ['GET', 'POST'], isConfig: true },
-      { path: '/cluster/acme', label: 'ACME', methods: ['GET'], isConfig: false },
-      { path: '/cluster/ceph', label: 'Ceph', methods: ['GET'], isConfig: false },
-      { path: '/cluster/jobs', label: 'Jobs', methods: ['GET'], isConfig: false },
-      { path: '/cluster/mapping', label: 'Mapping', methods: ['GET'], isConfig: false },
-      { path: '/cluster/metrics', label: 'Metrics', methods: ['GET'], isConfig: false },
-      { path: '/cluster/notifications', label: 'Notifications', methods: ['GET'], isConfig: false },
-      { path: '/cluster/options', label: 'Options', methods: ['GET', 'PUT'], isConfig: true },
-      { path: '/cluster/sdn', label: 'SDN', methods: ['GET'], isConfig: false },
-      { path: '/cluster/resources', label: 'Resources', methods: ['GET'], isConfig: false },
-      { path: '/cluster/status', label: 'Status', methods: ['GET'], isConfig: false },
-      { path: '/cluster/tasks', label: 'Tasks', methods: ['GET'], isConfig: false },
-      { path: '/cluster/log', label: 'Log', methods: ['GET'], isConfig: false },
-      { path: '/cluster/nextid', label: 'Next ID', methods: ['GET'], isConfig: false },
-    ]
-  },
-  {
-    path: '/nodes',
-    label: 'Nodes',
-    methods: ['GET'],
-    isConfig: false,
-    // Children are dynamic based on available nodes
-  },
-  {
-    path: '/access',
-    label: 'Access Control',
-    methods: ['GET'],
-    isConfig: false,
-    children: [
-      { path: '/access/users', label: 'Users', methods: ['GET', 'POST'], isConfig: true },
-      { path: '/access/groups', label: 'Groups', methods: ['GET', 'POST'], isConfig: true },
-      { path: '/access/roles', label: 'Roles', methods: ['GET', 'POST'], isConfig: true },
-      { path: '/access/acl', label: 'ACL', methods: ['GET', 'PUT'], isConfig: true },
-      { path: '/access/domains', label: 'Authentication Domains', methods: ['GET', 'POST'], isConfig: true },
-      { path: '/access/tfa', label: 'Two-Factor Auth', methods: ['GET', 'POST'], isConfig: true },
-      { path: '/access/openid', label: 'OpenID', methods: ['GET', 'POST'], isConfig: true },
-      { path: '/access/permissions', label: 'Permissions', methods: ['GET'], isConfig: false },
-    ]
-  },
-  {
-    path: '/pools',
-    label: 'Pools',
-    methods: ['GET', 'POST'],
-    isConfig: true,
-  },
-  {
-    path: '/storage',
-    label: 'Storage',
-    methods: ['GET', 'POST'],
-    isConfig: true,
-  },
-  {
-    path: '/version',
-    label: 'Version',
-    methods: ['GET'],
-    isConfig: false,
-  },
-];
-```
-
----
-
-## Part 3: Frontend Components
-
-### 3.1 New Layout with Tree Navigation
-
-**File: `src/components/layout/TenantLayout.tsx`**
-
-A new layout component that includes:
-- Tenant header with breadcrumb navigation
-- Collapsible tree sidebar for Proxmox API navigation
-- Main content area for viewing/editing
-
-```text
-+------------------------------------------------------------------+
-| [Logo] Proxmox VNC Nexus | ACME Corp  | [User Menu] [Theme]      |
-+------------------------------------------------------------------+
-| Tree Menu (280px)          | Content Area                        |
-|                            |                                      |
-| v Cluster                  | +----------------------------------+ |
-|   > Config                 | | Cluster Status                   | |
-|   > Firewall               | |                                  | |
-|   > HA                     | | Nodes: 3 online                  | |
-|   > Backup                 | | Quorum: OK                       | |
-|   > Options                | | Version: 8.1                     | |
-|   > Status                 | |                                  | |
-|   > Tasks                  | +----------------------------------+ |
-|   > Log                    |                                      |
-| v Nodes                    |                                      |
-|   > pve1                   |                                      |
-|     > QEMU                 |                                      |
-|     > LXC                  |                                      |
-|     > Storage              |                                      |
-|   > pve2                   |                                      |
-| > Access Control           |                                      |
-| > Pools                    |                                      |
-| > Storage                  |                                      |
-+----------------------------+--------------------------------------+
-```
-
-### 3.2 API Tree Navigation Component
-
-**File: `src/components/proxmox/ApiTreeNav.tsx`**
-
-Features:
-- Collapsible tree structure using Radix Collapsible
-- Dynamic node loading for `/nodes` endpoint
-- Visual indicators for config vs view-only endpoints
-- Active state highlighting
-- Search/filter capability
-
-### 3.3 API Content Viewer/Editor
-
-**File: `src/components/proxmox/ApiContentPanel.tsx`**
-
-Two modes:
-1. **View Mode** (isConfig: false)
-   - Read-only display of API data
-   - Refresh button to reload
-   - JSON/Table toggle for data display
-   
-2. **Config Mode** (isConfig: true)
-   - Form-based editor with validation
-   - Parameter inputs based on API schema
-   - Save/Cancel buttons
-   - Diff view for changes
-
-### 3.4 Tenant Selector Page
-
-**File: `src/pages/TenantSelector.tsx`**
-
-For admins to select which tenant to manage:
-- Grid of tenant cards with status indicators
-- Quick stats (servers, VMs, storage)
-- Create new tenant button
-- Search/filter tenants
-
-### 3.5 Tenant Dashboard
-
-**File: `src/pages/TenantDashboard.tsx`**
-
-Overview page showing:
-- Environment summary (nodes, VMs, storage, network)
-- Server health status
-- Recent activity/tasks
-- Quick actions
-
----
-
-## Part 4: New Pages and Routes
-
-### 4.1 Route Structure
-
-```typescript
-// New routes to add to App.tsx
-const routes = [
-  // Existing routes...
-  
-  // Tenant management (admin only)
-  { path: "/tenants", element: <TenantSelector /> },
-  { path: "/tenants/new", element: <TenantCreate /> },
-  { path: "/tenants/:tenantId", element: <TenantDashboard /> },
-  
-  // Proxmox API Explorer (within tenant context)
-  { path: "/tenants/:tenantId/cluster/*", element: <ProxmoxApiExplorer section="cluster" /> },
-  { path: "/tenants/:tenantId/nodes/*", element: <ProxmoxApiExplorer section="nodes" /> },
-  { path: "/tenants/:tenantId/access/*", element: <ProxmoxApiExplorer section="access" /> },
-  { path: "/tenants/:tenantId/pools/*", element: <ProxmoxApiExplorer section="pools" /> },
-  { path: "/tenants/:tenantId/storage/*", element: <ProxmoxApiExplorer section="storage" /> },
-  
-  // Config settings pages
-  { path: "/tenants/:tenantId/config/:configPath", element: <ProxmoxConfigEditor /> },
-];
-```
-
----
-
-## Part 5: Edge Function Updates
-
-### 5.1 Enhanced Proxmox API Proxy
-
-**File: `supabase/functions/proxmox-api/index.ts`**
-
-Update to support:
-- Tenant-aware server selection
-- Multiple server aggregation for cluster-level data
-- Caching of configuration data
-- Write operations with validation
-
-```typescript
-interface ProxmoxApiRequest {
-  tenantId: string;
-  serverId?: string; // Optional, auto-select if not provided
-  path: string;
-  method: 'GET' | 'POST' | 'PUT' | 'DELETE';
-  body?: Record<string, unknown>;
-  aggregateFromAll?: boolean; // For cluster resources
-}
-```
-
-### 5.2 New Tenant Management Edge Function
-
-**File: `supabase/functions/tenants/index.ts`**
-
-Actions:
-- `list`: Get all tenants user has access to
-- `create`: Create new tenant (admin only)
-- `update`: Update tenant details
-- `delete`: Delete tenant and all associated data
-- `get-stats`: Get tenant statistics (servers, VMs, etc.)
-
----
-
-## Part 6: Type Updates
+### 1.2 Type Updates
 
 **File: `src/lib/types.ts`**
 
 ```typescript
-// Add new types
-export interface Tenant {
-  id: string;
-  name: string;
-  slug: string;
-  description: string | null;
-  logo_url: string | null;
-  is_active: boolean;
-  created_at: string;
-  updated_at: string;
+export interface ProxmoxServer {
+  // ...existing fields
+  connection_timeout: number; // milliseconds
 }
 
-export interface TenantStats {
-  servers: number;
-  activeServers: number;
-  totalVMs: number;
-  runningVMs: number;
-  totalStorage: number;
-  usedStorage: number;
-}
-
-export interface UserTenantAssignment {
-  id: string;
-  user_id: string;
-  tenant_id: string;
-  role: 'admin' | 'manager' | 'viewer';
-  created_at: string;
-}
-
-export interface ProxmoxApiConfig {
-  id: string;
-  tenant_id: string;
-  server_id: string;
-  config_path: string;
-  config_data: Record<string, unknown>;
-  last_synced_at: string | null;
-}
-
-export interface ApiTreeNode {
-  path: string;
-  label: string;
-  isConfig: boolean;
-  isExpanded?: boolean;
-  isLoading?: boolean;
-  children?: ApiTreeNode[];
-  data?: unknown;
+export interface ProxmoxServerInput {
+  // ...existing fields
+  connection_timeout?: number;
 }
 ```
 
----
+### 1.3 Edge Function Updates
 
-## Part 7: Navigation Updates
+Update all edge functions to use the server's `connection_timeout` value:
 
-### 7.1 Updated Dashboard Layout
+**Files to update:**
+- `supabase/functions/_shared/proxmox-utils.ts` - Add `timeout` to `ProxmoxCredentials` interface
+- `supabase/functions/proxmox-servers/index.ts` - Use timeout in health checks and test connections
+- `supabase/functions/list-vms/index.ts` - Use timeout when fetching VMs
+- `supabase/functions/vm-actions/index.ts` - Use timeout for VM actions
+- `supabase/functions/vm-console/index.ts` - Use timeout for VNC ticket requests
 
-**File: `src/components/layout/DashboardLayout.tsx`**
-
-Add tenant context and navigation:
-- Tenant switcher in header (for users with multi-tenant access)
-- Update sidebar to show Proxmox API tree when in tenant context
-- Breadcrumb navigation
-
-### 7.2 New Navigation Items
+**Shared utility update:**
 
 ```typescript
-// When in tenant context, show these nav items
-const tenantNavItems = [
-  { label: "Overview", href: `/tenants/${tenantId}`, icon: LayoutDashboard },
-  { label: "Cluster", href: `/tenants/${tenantId}/cluster`, icon: Server },
-  { label: "Nodes", href: `/tenants/${tenantId}/nodes`, icon: HardDrive },
-  { label: "Access", href: `/tenants/${tenantId}/access`, icon: Shield },
-  { label: "Pools", href: `/tenants/${tenantId}/pools`, icon: Layers },
-  { label: "Storage", href: `/tenants/${tenantId}/storage`, icon: Database },
-  { label: "Servers", href: `/tenants/${tenantId}/servers`, icon: Server },
-];
+export interface ProxmoxCredentials {
+  host: string;
+  port: string;
+  token: string;
+  useTailscale: boolean;
+  timeout: number; // NEW
+}
+
+export async function getProxmoxCredentials(...): Promise<ProxmoxCredentials> {
+  // ...existing code
+  return {
+    host: effectiveHost,
+    port: effectivePort,
+    token: decryptToken(server.api_token_encrypted, encryptionKey),
+    useTailscale,
+    timeout: server.connection_timeout || 10000, // NEW
+  };
+}
+```
+
+**Usage in fetch calls:**
+
+```typescript
+const response = await fetch(url, {
+  headers: { "Authorization": `PVEAPIToken=${token}` },
+  signal: AbortSignal.timeout(credentials.timeout),
+});
+```
+
+### 1.4 Frontend UI Updates
+
+**File: `src/pages/ProxmoxServers.tsx`**
+
+Add timeout configuration to the server form:
+
+```
++----------------------------------------+
+|  ─────── Connection Settings ───────   |
+|                                        |
+|  Connection Timeout                    |
+|  [──────────●───] 30 seconds          |  <- Slider input
+|                                        |
+|  Recommended: 10-15s for direct,      |
+|  30-60s for Tailscale connections      |
++----------------------------------------+
+```
+
+The UI will include:
+- A slider component (range: 5-120 seconds)
+- Helper text explaining recommended values
+- Auto-suggestion when Tailscale is enabled
+
+**Form state addition:**
+
+```typescript
+const [formData, setFormData] = useState<ProxmoxServerInput & {
+  // ...existing fields
+  connection_timeout?: number; // in seconds for UI
+}>({
+  // ...existing defaults
+  connection_timeout: 10,
+});
+```
+
+### 1.5 CSV Import Update
+
+**File: `src/components/servers/CSVImportDialog.tsx`**
+
+Add `connection_timeout` column support:
+
+```csv
+name,host,port,api_token,verify_ssl,use_tailscale,tailscale_hostname,tailscale_port,connection_timeout
+Production,pve1.company.com,8006,user@realm!token=uuid,true,false,,,10
+Tailscale Server,192.168.1.100,8006,dev@pam!token=uuid,false,true,pve.tailnet.ts.net,8006,30
 ```
 
 ---
 
-## Part 8: Implementation Order
+## Feature 2: Tailscale Funnel Support with Documentation
+
+### 2.1 New Documentation Component
+
+**File: `src/components/servers/TailscaleFunnelHelp.tsx`** (New)
+
+A collapsible help section explaining Tailscale Funnel:
+
+```
++------------------------------------------------+
+|  ℹ️ Tailscale Funnel Guide           [Expand]  |
++------------------------------------------------+
+| Tailscale Funnel allows you to expose your     |
+| Proxmox server securely to the internet        |
+| without opening firewall ports.                |
+|                                                |
+| Setup Steps:                                   |
+| 1. Install Tailscale on your Proxmox server   |
+| 2. Enable Funnel: tailscale funnel 8006       |
+| 3. Note the public URL (e.g., pve.tail1234.ts.net) |
+| 4. Enter the Funnel URL as Tailscale hostname |
+|                                                |
+| Benefits:                                      |
+| • No port forwarding needed                   |
+| • End-to-end TLS encryption                   |
+| • Automatic HTTPS certificates                |
+|                                                |
+| [Read Tailscale Docs ↗]                       |
++------------------------------------------------+
+```
+
+### 2.2 UI Integration
+
+**File: `src/pages/ProxmoxServers.tsx`**
+
+Add the help component below the Tailscale configuration section:
+
+```tsx
+{formData.use_tailscale && (
+  <TailscaleFunnelHelp />
+)}
+```
+
+### 2.3 Funnel Detection Badge
+
+Add a visual indicator when the Tailscale hostname appears to be a Funnel URL (contains `.ts.net`):
+
+```tsx
+{server.use_tailscale && server.tailscale_hostname?.includes('.ts.net') && (
+  <Badge variant="outline" className="text-xs text-purple-600 border-purple-600">
+    <ExternalLink className="h-3 w-3 mr-1" />
+    Funnel
+  </Badge>
+)}
+```
+
+### 2.4 Type Updates
+
+**File: `src/lib/types.ts`**
+
+No changes needed - existing fields support Funnel URLs.
+
+---
+
+## Feature 3: Tailscale Connection Indicator on VM Cards
+
+### 3.1 Extend VM Interface
+
+**File: `src/lib/types.ts`**
+
+```typescript
+export interface VM {
+  // ...existing fields
+  useTailscale?: boolean;      // NEW: Is this VM accessed via Tailscale?
+  tailscaleHostname?: string;  // NEW: The Tailscale hostname used
+}
+```
+
+### 3.2 Update List VMs Edge Function
+
+**File: `supabase/functions/list-vms/index.ts`**
+
+Include Tailscale info when fetching VMs from servers:
+
+```typescript
+// When fetching from each server, include Tailscale status
+const { data: server } = await supabase
+  .from("proxmox_servers")
+  .select("id, name, host, port, api_token_encrypted, use_tailscale, tailscale_hostname, tailscale_port")
+  ...
+
+const vms = (proxmoxData.data || []).map((vm: VM) => ({
+  ...vm,
+  serverId: server.id,
+  serverName: server.name,
+  useTailscale: server.use_tailscale && !!server.tailscale_hostname, // NEW
+  tailscaleHostname: server.use_tailscale ? server.tailscale_hostname : null, // NEW
+}));
+```
+
+### 3.3 Update VMCard Component
+
+**File: `src/components/dashboard/VMCard.tsx`**
+
+Add a Tailscale indicator badge:
+
+```tsx
+import { Link2 } from "lucide-react";
+
+// In the card header, next to server name badge
+{vm.useTailscale && (
+  <Tooltip>
+    <TooltipTrigger asChild>
+      <Badge variant="outline" className="text-xs text-blue-600 border-blue-600">
+        <Link2 className="h-3 w-3 mr-1" />
+        Tailscale
+      </Badge>
+    </TooltipTrigger>
+    <TooltipContent>
+      <p>Connected via Tailscale</p>
+      {vm.tailscaleHostname && (
+        <p className="text-xs text-muted-foreground">{vm.tailscaleHostname}</p>
+      )}
+    </TooltipContent>
+  </Tooltip>
+)}
+```
+
+Visual design:
+- Blue outline badge with Link2 icon
+- Tooltip showing "Connected via Tailscale" and the hostname
+- Positioned after the server name badge
+
+### 3.4 Update VMTable Component
+
+**File: `src/components/dashboard/VMTable.tsx`**
+
+Add Tailscale indicator to the Server column:
+
+```tsx
+<TableCell className="text-muted-foreground">
+  <div className="flex items-center gap-1">
+    {vm.serverName || "-"}
+    {vm.useTailscale && (
+      <Tooltip>
+        <TooltipTrigger>
+          <Link2 className="h-3 w-3 text-blue-600" />
+        </TooltipTrigger>
+        <TooltipContent>
+          <p>Tailscale: {vm.tailscaleHostname}</p>
+        </TooltipContent>
+      </Tooltip>
+    )}
+  </div>
+</TableCell>
+```
+
+---
+
+## Implementation Order
 
 | Step | Task | Files |
 |------|------|-------|
-| 1 | Database migration for tenants and configs | SQL migration |
-| 2 | Create tenant types | `src/lib/types.ts` |
-| 3 | Create API tree configuration | `src/config/proxmoxApiTree.ts` |
-| 4 | Create tenants edge function | `supabase/functions/tenants/index.ts` |
-| 5 | Update proxmox-api edge function | `supabase/functions/proxmox-api/index.ts` |
-| 6 | Create TenantLayout component | `src/components/layout/TenantLayout.tsx` |
-| 7 | Create ApiTreeNav component | `src/components/proxmox/ApiTreeNav.tsx` |
-| 8 | Create ApiContentPanel component | `src/components/proxmox/ApiContentPanel.tsx` |
-| 9 | Create TenantSelector page | `src/pages/TenantSelector.tsx` |
-| 10 | Create TenantDashboard page | `src/pages/TenantDashboard.tsx` |
-| 11 | Create ProxmoxApiExplorer page | `src/pages/ProxmoxApiExplorer.tsx` |
-| 12 | Create ProxmoxConfigEditor page | `src/pages/ProxmoxConfigEditor.tsx` |
-| 13 | Update App.tsx with new routes | `src/App.tsx` |
-| 14 | Update DashboardLayout for tenant context | `src/components/layout/DashboardLayout.tsx` |
-| 15 | Create useTenants hook | `src/hooks/useTenants.ts` |
-| 16 | Create useProxmoxApi hook | `src/hooks/useProxmoxApi.ts` |
-| 17 | Deploy edge functions | Deployment |
+| 1 | Database migration for connection_timeout | SQL migration |
+| 2 | Update VM and ProxmoxServer types | `src/lib/types.ts` |
+| 3 | Update shared proxmox-utils | `supabase/functions/_shared/proxmox-utils.ts` |
+| 4 | Update proxmox-servers edge function | `supabase/functions/proxmox-servers/index.ts` |
+| 5 | Update list-vms edge function with Tailscale info | `supabase/functions/list-vms/index.ts` |
+| 6 | Update vm-actions and vm-console functions | Edge functions |
+| 7 | Create TailscaleFunnelHelp component | `src/components/servers/TailscaleFunnelHelp.tsx` |
+| 8 | Update ProxmoxServers page with timeout slider | `src/pages/ProxmoxServers.tsx` |
+| 9 | Update VMCard with Tailscale indicator | `src/components/dashboard/VMCard.tsx` |
+| 10 | Update VMTable with Tailscale indicator | `src/components/dashboard/VMTable.tsx` |
+| 11 | Update CSVImportDialog for timeout column | `src/components/servers/CSVImportDialog.tsx` |
+| 12 | Deploy edge functions | Deployment |
 
 ---
 
-## Summary of New Components
+## Summary of Changes
 
-| Component | Purpose |
+| Component | Changes |
 |-----------|---------|
-| **TenantLayout** | Layout wrapper with tree navigation for tenant context |
-| **ApiTreeNav** | Collapsible tree menu mirroring Proxmox API structure |
-| **ApiContentPanel** | View/edit panel for API data |
-| **TenantSelector** | Grid of tenant cards for admin selection |
-| **TenantDashboard** | Overview dashboard for selected tenant |
-| **ProxmoxApiExplorer** | Main page for browsing API endpoints |
-| **ProxmoxConfigEditor** | Form-based editor for config endpoints |
+| **Database** | Add `connection_timeout` column (integer, default 10000ms) |
+| **Types** | Add `connection_timeout` to server types, `useTailscale` and `tailscaleHostname` to VM interface |
+| **Shared Utils** | Add `timeout` to `ProxmoxCredentials` interface |
+| **Edge Functions** | Use configurable timeout in all fetch calls, include Tailscale info in VM data |
+| **TailscaleFunnelHelp** | New component with Funnel setup documentation |
+| **ProxmoxServers page** | Add timeout slider, integrate Funnel help, show Funnel badge |
+| **VMCard** | Add blue Tailscale badge with tooltip |
+| **VMTable** | Add Tailscale icon in Server column |
+| **CSVImportDialog** | Support `connection_timeout` column |
 
 ---
 
-## UI/UX Features
+## UI/UX Details
 
-### Tree Navigation
-- Expand/collapse with chevron icons
-- Visual distinction between config (wrench icon) and view-only (eye icon) endpoints
-- Loading states for async data
-- Active state highlighting with blue accent
-- Keyboard navigation support
+### Timeout Slider
 
-### Config Editor
-- Dynamic form generation based on API parameters
-- Field validation with error messages
-- Preview changes before saving
-- Undo/redo support
-- Auto-save draft to localStorage
+```
+Connection Timeout
+[─────────●──────────────] 30s
 
-### View Panel
-- Table view for lists (users, VMs, etc.)
-- JSON view with syntax highlighting
-- Export to CSV/JSON
-- Refresh with loading indicator
-- Pagination for large datasets
+5s ──────────────────────── 120s
+     ↑ Direct    Tailscale ↑
+```
+
+- Range: 5-120 seconds
+- Step: 5 seconds
+- Shows current value next to slider
+- Helper text below recommends 10-15s for direct, 30-60s for Tailscale
+
+### Tailscale Indicator on VM Cards
+
+```
++-------------------------------------------+
+| [Server Icon] Web Server                  |
+| QEMU • Node: pve1 • ID: 101              |
+| [Production] [🔗 Tailscale]              |  <- Blue Tailscale badge
+|                                           |
+| CPU: [======     ] 45%                   |
+| Memory: [========  ] 78%                 |
++-------------------------------------------+
+```
+
+### Funnel Badge on Server Cards
+
+```
++-------------------------------------------+
+| Server: Production Cluster                |
+| Host: pve1.company.com:8006              |
+| Tailscale: pve.tail1234.ts.net [Funnel]  |  <- Purple Funnel badge
+| Status: ● Online                          |
++-------------------------------------------+
+```
 
 ---
 
 ## Security Considerations
 
-1. **Tenant Isolation**: RLS policies ensure users only see tenants they're assigned to
-2. **Role-Based Access**: Tenant roles (admin/manager/viewer) control write permissions
-3. **API Token Scope**: Each server's token is only used for that server's requests
-4. **Audit Logging**: Track config changes with user and timestamp
-5. **Config Validation**: Server-side validation before applying changes
+1. **Timeout Limits**: Maximum timeout capped at 120 seconds to prevent abuse
+2. **Funnel Security**: Document that Funnel URLs are publicly accessible
+3. **Tailscale Info Exposure**: Only show Tailscale hostnames to authenticated users
 
 ---
 
-## Dashboard Environment Display
+## Technical Notes
 
-The tenant dashboard will show a comprehensive environment overview:
+### Why Custom Timeouts Matter for Tailscale
 
-```text
-+------------------------------------------------------------------+
-|                    Environment Overview                           |
-+------------------------------------------------------------------+
-|  +----------------+  +----------------+  +----------------+       |
-|  | Nodes          |  | Virtual Machines|  | Containers    |       |
-|  | 3 online       |  | 24 running      |  | 8 running     |       |
-|  | 0 offline      |  | 5 stopped       |  | 2 stopped     |       |
-|  +----------------+  +----------------+  +----------------+       |
-|                                                                   |
-|  +----------------+  +----------------+  +----------------+       |
-|  | CPU Usage      |  | Memory Usage   |  | Storage        |       |
-|  | [======  ] 45% |  | [========] 78% |  | 2.4TB / 10TB  |       |
-|  | avg across 3   |  | avg across 3   |  | 24% used      |       |
-|  +----------------+  +----------------+  +----------------+       |
-|                                                                   |
-|  +---------------------------------------------------------------+|
-|  | Server Health                                                  ||
-|  | +------------------+------------------+------------------+     ||
-|  | | pve1.local       | pve2.local       | pve3.local       |     ||
-|  | | * Online         | * Online         | * Online         |     ||
-|  | | CPU: 32% Mem: 65%| CPU: 45% Mem: 82%| CPU: 58% Mem: 71%|     ||
-|  | +------------------+------------------+------------------+     ||
-|  +---------------------------------------------------------------+|
-+------------------------------------------------------------------+
-```
+- Tailscale connections may traverse multiple relay servers (DERP)
+- Initial connection establishment can take longer than direct connections
+- High-latency paths require longer timeouts to avoid false negatives
+- Default 10-second timeout often insufficient for distant Tailscale peers
 
-This provides a complete at-a-glance view of the entire Proxmox environment for the selected tenant.
+### Tailscale Funnel vs Direct Tailscale
+
+| Feature | Direct Tailscale | Tailscale Funnel |
+|---------|------------------|------------------|
+| Requires Tailnet membership | Yes | No |
+| Public access | No | Yes |
+| Edge function compatibility | Requires Tailscale | Works natively |
+| Security | Tailnet auth | HTTPS + optional auth |
+
+Funnel is recommended for Supabase Edge Functions since they cannot join a Tailnet.
+
