@@ -31,6 +31,7 @@ import {
   Palette,
   Code2,
   BarChart3,
+  Bell,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ApiTreeNav } from "@/components/proxmox/ApiTreeNav";
@@ -70,6 +71,7 @@ export function TenantLayout({ children, showApiTree = false }: TenantLayoutProp
     { label: "Storage", href: `/tenants/${tenantId}/storage`, icon: Database },
     { label: "API Playground", href: `/tenants/${tenantId}/api-playground`, icon: Code2 },
     { label: "Monitoring", href: `/tenants/${tenantId}/monitoring`, icon: BarChart3 },
+    { label: "Notifications", href: `/tenants/${tenantId}/notifications`, icon: Bell },
     { label: "Servers", href: `/tenants/${tenantId}/servers`, icon: Settings },
     { label: "Users", href: `/tenants/${tenantId}/users`, icon: Building2 },
     { label: "Audit Log", href: `/tenants/${tenantId}/audit-log`, icon: FileText },
