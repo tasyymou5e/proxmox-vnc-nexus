@@ -24,6 +24,8 @@ const TenantSelector = lazy(() => import("./pages/TenantSelector"));
 const TenantDashboard = lazy(() => import("./pages/TenantDashboard"));
 const TenantServers = lazy(() => import("./pages/TenantServers"));
 const TenantUsers = lazy(() => import("./pages/TenantUsers"));
+const TenantSettings = lazy(() => import("./pages/TenantSettings"));
+const TenantAuditLog = lazy(() => import("./pages/TenantAuditLog"));
 const ProxmoxApiExplorer = lazy(() => import("./pages/ProxmoxApiExplorer"));
 
 const queryClient = new QueryClient({
@@ -174,6 +176,26 @@ function AppRoutes() {
             <ProtectedRoute>
               <Suspense fallback={<PageLoader />}>
                 <TenantServers />
+              </Suspense>
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/tenants/:tenantId/settings"
+          element={
+            <ProtectedRoute>
+              <Suspense fallback={<PageLoader />}>
+                <TenantSettings />
+              </Suspense>
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/tenants/:tenantId/audit-log"
+          element={
+            <ProtectedRoute>
+              <Suspense fallback={<PageLoader />}>
+                <TenantAuditLog />
               </Suspense>
             </ProtectedRoute>
           }

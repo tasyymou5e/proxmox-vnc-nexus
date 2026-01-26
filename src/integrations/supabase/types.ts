@@ -14,6 +14,100 @@ export type Database = {
   }
   public: {
     Tables: {
+      audit_logs: {
+        Row: {
+          action_type: string
+          created_at: string | null
+          details: Json | null
+          id: string
+          ip_address: string | null
+          resource_id: string | null
+          resource_name: string | null
+          resource_type: string
+          tenant_id: string
+          user_agent: string | null
+          user_id: string
+        }
+        Insert: {
+          action_type: string
+          created_at?: string | null
+          details?: Json | null
+          id?: string
+          ip_address?: string | null
+          resource_id?: string | null
+          resource_name?: string | null
+          resource_type: string
+          tenant_id: string
+          user_agent?: string | null
+          user_id: string
+        }
+        Update: {
+          action_type?: string
+          created_at?: string | null
+          details?: Json | null
+          id?: string
+          ip_address?: string | null
+          resource_id?: string | null
+          resource_name?: string | null
+          resource_type?: string
+          tenant_id?: string
+          user_agent?: string | null
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "audit_logs_tenant_id_fkey"
+            columns: ["tenant_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      connection_metrics: {
+        Row: {
+          created_at: string | null
+          error_message: string | null
+          id: string
+          response_time_ms: number | null
+          retry_count: number | null
+          server_id: string
+          success: boolean
+          timeout_used_ms: number | null
+          used_tailscale: boolean | null
+        }
+        Insert: {
+          created_at?: string | null
+          error_message?: string | null
+          id?: string
+          response_time_ms?: number | null
+          retry_count?: number | null
+          server_id: string
+          success: boolean
+          timeout_used_ms?: number | null
+          used_tailscale?: boolean | null
+        }
+        Update: {
+          created_at?: string | null
+          error_message?: string | null
+          id?: string
+          response_time_ms?: number | null
+          retry_count?: number | null
+          server_id?: string
+          success?: boolean
+          timeout_used_ms?: number | null
+          used_tailscale?: boolean | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "connection_metrics_server_id_fkey"
+            columns: ["server_id"]
+            isOneToOne: false
+            referencedRelation: "proxmox_servers"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       connection_sessions: {
         Row: {
           ended_at: string | null
@@ -128,6 +222,7 @@ export type Database = {
       proxmox_servers: {
         Row: {
           api_token_encrypted: string
+          avg_response_time_ms: number | null
           connection_status: string | null
           connection_timeout: number | null
           created_at: string | null
@@ -137,8 +232,10 @@ export type Database = {
           is_active: boolean | null
           last_connected_at: string | null
           last_health_check_at: string | null
+          learned_timeout_ms: number | null
           name: string
           port: number
+          success_rate: number | null
           tailscale_hostname: string | null
           tailscale_port: number | null
           tenant_id: string | null
@@ -149,6 +246,7 @@ export type Database = {
         }
         Insert: {
           api_token_encrypted: string
+          avg_response_time_ms?: number | null
           connection_status?: string | null
           connection_timeout?: number | null
           created_at?: string | null
@@ -158,8 +256,10 @@ export type Database = {
           is_active?: boolean | null
           last_connected_at?: string | null
           last_health_check_at?: string | null
+          learned_timeout_ms?: number | null
           name: string
           port?: number
+          success_rate?: number | null
           tailscale_hostname?: string | null
           tailscale_port?: number | null
           tenant_id?: string | null
@@ -170,6 +270,7 @@ export type Database = {
         }
         Update: {
           api_token_encrypted?: string
+          avg_response_time_ms?: number | null
           connection_status?: string | null
           connection_timeout?: number | null
           created_at?: string | null
@@ -179,8 +280,10 @@ export type Database = {
           is_active?: boolean | null
           last_connected_at?: string | null
           last_health_check_at?: string | null
+          learned_timeout_ms?: number | null
           name?: string
           port?: number
+          success_rate?: number | null
           tailscale_hostname?: string | null
           tailscale_port?: number | null
           tenant_id?: string | null
@@ -194,6 +297,68 @@ export type Database = {
             foreignKeyName: "proxmox_servers_tenant_id_fkey"
             columns: ["tenant_id"]
             isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      tenant_settings: {
+        Row: {
+          accent_color: string | null
+          auto_health_check_interval: number | null
+          created_at: string | null
+          default_connection_timeout: number | null
+          default_verify_ssl: boolean | null
+          id: string
+          logo_url: string | null
+          notification_email: string | null
+          notify_on_server_offline: boolean | null
+          notify_on_user_changes: boolean | null
+          notify_on_vm_action: boolean | null
+          primary_color: string | null
+          secondary_color: string | null
+          tenant_id: string
+          updated_at: string | null
+        }
+        Insert: {
+          accent_color?: string | null
+          auto_health_check_interval?: number | null
+          created_at?: string | null
+          default_connection_timeout?: number | null
+          default_verify_ssl?: boolean | null
+          id?: string
+          logo_url?: string | null
+          notification_email?: string | null
+          notify_on_server_offline?: boolean | null
+          notify_on_user_changes?: boolean | null
+          notify_on_vm_action?: boolean | null
+          primary_color?: string | null
+          secondary_color?: string | null
+          tenant_id: string
+          updated_at?: string | null
+        }
+        Update: {
+          accent_color?: string | null
+          auto_health_check_interval?: number | null
+          created_at?: string | null
+          default_connection_timeout?: number | null
+          default_verify_ssl?: boolean | null
+          id?: string
+          logo_url?: string | null
+          notification_email?: string | null
+          notify_on_server_offline?: boolean | null
+          notify_on_user_changes?: boolean | null
+          notify_on_vm_action?: boolean | null
+          primary_color?: string | null
+          secondary_color?: string | null
+          tenant_id?: string
+          updated_at?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "tenant_settings_tenant_id_fkey"
+            columns: ["tenant_id"]
+            isOneToOne: true
             referencedRelation: "tenants"
             referencedColumns: ["id"]
           },

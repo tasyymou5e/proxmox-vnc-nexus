@@ -27,6 +27,8 @@ import {
   Shield,
   Layers,
   Database,
+  FileText,
+  Palette,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ApiTreeNav } from "@/components/proxmox/ApiTreeNav";
@@ -58,41 +60,16 @@ export function TenantLayout({ children, showApiTree = false }: TenantLayoutProp
   };
 
   const navItems = [
-    {
-      label: "Overview",
-      href: `/tenants/${tenantId}`,
-      icon: LayoutDashboard,
-    },
-    {
-      label: "Cluster",
-      href: `/tenants/${tenantId}/cluster`,
-      icon: Server,
-    },
-    {
-      label: "Nodes",
-      href: `/tenants/${tenantId}/nodes`,
-      icon: HardDrive,
-    },
-    {
-      label: "Access",
-      href: `/tenants/${tenantId}/access`,
-      icon: Shield,
-    },
-    {
-      label: "Pools",
-      href: `/tenants/${tenantId}/pools`,
-      icon: Layers,
-    },
-    {
-      label: "Storage",
-      href: `/tenants/${tenantId}/storage`,
-      icon: Database,
-    },
-    {
-      label: "Servers",
-      href: `/tenants/${tenantId}/servers`,
-      icon: Settings,
-    },
+    { label: "Overview", href: `/tenants/${tenantId}`, icon: LayoutDashboard },
+    { label: "Cluster", href: `/tenants/${tenantId}/cluster`, icon: Server },
+    { label: "Nodes", href: `/tenants/${tenantId}/nodes`, icon: HardDrive },
+    { label: "Access", href: `/tenants/${tenantId}/access`, icon: Shield },
+    { label: "Pools", href: `/tenants/${tenantId}/pools`, icon: Layers },
+    { label: "Storage", href: `/tenants/${tenantId}/storage`, icon: Database },
+    { label: "Servers", href: `/tenants/${tenantId}/servers`, icon: Settings },
+    { label: "Users", href: `/tenants/${tenantId}/users`, icon: Building2 },
+    { label: "Audit Log", href: `/tenants/${tenantId}/audit-log`, icon: FileText },
+    { label: "Settings", href: `/tenants/${tenantId}/settings`, icon: Palette },
   ];
 
   const isActive = (path: string) => {
