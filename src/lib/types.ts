@@ -121,3 +121,85 @@ export interface BulkImportResult {
   failed: ImportError[];
   message: string;
 }
+
+// Multi-tenancy types
+export interface Tenant {
+  id: string;
+  name: string;
+  slug: string;
+  description: string | null;
+  logo_url: string | null;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+  created_by: string | null;
+}
+
+export interface TenantInput {
+  name: string;
+  slug: string;
+  description?: string;
+  logo_url?: string;
+  is_active?: boolean;
+}
+
+export interface TenantStats {
+  servers: number;
+  activeServers: number;
+  totalVMs: number;
+  runningVMs: number;
+  totalStorage: number;
+  usedStorage: number;
+}
+
+export type TenantRole = 'admin' | 'manager' | 'viewer';
+
+export interface UserTenantAssignment {
+  id: string;
+  user_id: string;
+  tenant_id: string;
+  role: TenantRole;
+  created_at: string;
+}
+
+export interface ProxmoxApiConfig {
+  id: string;
+  tenant_id: string;
+  server_id: string;
+  config_path: string;
+  config_data: Record<string, unknown>;
+  last_synced_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+// API Tree types
+export interface ApiParameter {
+  name: string;
+  type: 'string' | 'integer' | 'boolean' | 'enum' | 'object' | 'array';
+  required: boolean;
+  description?: string;
+  enumValues?: string[];
+  default?: unknown;
+}
+
+export interface ApiEndpoint {
+  path: string;
+  label: string;
+  description?: string;
+  methods: ('GET' | 'POST' | 'PUT' | 'DELETE')[];
+  isConfig: boolean;
+  icon?: string;
+  children?: ApiEndpoint[];
+  parameters?: ApiParameter[];
+}
+
+export interface ApiTreeNode {
+  path: string;
+  label: string;
+  isConfig: boolean;
+  isExpanded?: boolean;
+  isLoading?: boolean;
+  children?: ApiTreeNode[];
+  data?: unknown;
+}
