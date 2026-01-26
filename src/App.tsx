@@ -17,6 +17,7 @@ const Dashboard = lazy(() => import("./pages/Dashboard"));
 const Console = lazy(() => import("./pages/Console"));
 const Admin = lazy(() => import("./pages/Admin"));
 const Profile = lazy(() => import("./pages/Profile"));
+const ProxmoxServers = lazy(() => import("./pages/ProxmoxServers"));
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -115,6 +116,16 @@ function AppRoutes() {
           <ProtectedRoute>
             <Suspense fallback={<PageLoader />}>
               <Profile />
+            </Suspense>
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/servers"
+        element={
+          <ProtectedRoute>
+            <Suspense fallback={<PageLoader />}>
+              <ProxmoxServers />
             </Suspense>
           </ProtectedRoute>
         }
