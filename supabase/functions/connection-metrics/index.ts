@@ -6,7 +6,7 @@ const corsHeaders = {
 };
 
 interface ConnectionMetricsRequest {
-  action: 'record' | 'calculate-optimal' | 'cleanup' | 'get-stats';
+  action: 'record' | 'calculate-optimal' | 'cleanup' | 'get-stats' | 'get-history';
   serverId?: string;
   // For 'record' action
   success?: boolean;
@@ -172,6 +172,51 @@ Deno.serve(async (req) => {
         );
       }
 
+      case 'get-history': {
+        if (!serverId) {
+          return new Response(
+            JSON.stringify({ error: "Server ID required" }),
+            { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+          );
+        }
+
+        // Get metrics from last 24 hours
+        const twentyFourHoursAgo = new Date();
+        twentyFourHoursAgo.setHours(twentyFourHoursAgo.getHours() - 24);
+
+        const { data: metrics, error } = await supabase
+          .from("connection_metrics")
+          .select("success, response_time_ms, created_at, used_tailscale, error_message")
+          .eq("server_id", serverId)
+          .gte("created_at", twentyFourHoursAgo.toISOString())
+          .order("created_at", { ascending: true });
+
+        if (error) throw error;
+
+        // Group by hour for chart display
+        const hourlyData = groupByHour(metrics || []);
+
+        const successfulResponses = (metrics || [])
+          .filter((m: { success: boolean; response_time_ms: number | null }) => m.success && m.response_time_ms)
+          .map((m: { response_time_ms: number }) => m.response_time_ms);
+
+        return new Response(
+          JSON.stringify({
+            history: {
+              hourly: hourlyData,
+              summary: {
+                totalAttempts: metrics?.length || 0,
+                successCount: (metrics || []).filter((m: { success: boolean }) => m.success).length,
+                avgResponseTime: successfulResponses.length > 0 
+                  ? Math.round(successfulResponses.reduce((a: number, b: number) => a + b, 0) / successfulResponses.length)
+                  : null,
+              }
+            }
+          }),
+          { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+
       default:
         return new Response(
           JSON.stringify({ error: "Unknown action" }),
@@ -240,4 +285,40 @@ async function updateServerStats(supabase: ReturnType<typeof createClient>, serv
     avg_response_time_ms: avgResponseTimeMs,
     success_rate: successRate,
   };
+}
+
+interface MetricRecord {
+  created_at: string;
+  success: boolean;
+  response_time_ms: number | null;
+}
+
+function groupByHour(metrics: MetricRecord[]) {
+  const hourlyMap = new Map<string, { success: number; failed: number; responseTimes: number[] }>();
+  
+  metrics.forEach(m => {
+    const hour = new Date(m.created_at).toISOString().slice(0, 13) + ":00:00Z";
+    if (!hourlyMap.has(hour)) {
+      hourlyMap.set(hour, { success: 0, failed: 0, responseTimes: [] });
+    }
+    const data = hourlyMap.get(hour)!;
+    if (m.success) {
+      data.success++;
+      if (m.response_time_ms) data.responseTimes.push(m.response_time_ms);
+    } else {
+      data.failed++;
+    }
+  });
+
+  // Calculate averages and format for chart
+  return Array.from(hourlyMap.entries()).map(([hour, data]) => ({
+    time: hour,
+    successRate: data.success + data.failed > 0 
+      ? Math.round((data.success / (data.success + data.failed)) * 100) 
+      : 100,
+    avgResponseTime: data.responseTimes.length > 0
+      ? Math.round(data.responseTimes.reduce((a, b) => a + b, 0) / data.responseTimes.length)
+      : null,
+    attempts: data.success + data.failed,
+  }));
 }

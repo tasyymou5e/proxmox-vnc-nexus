@@ -1,5 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { listVMs, performVMAction, getVMConsole } from "@/lib/api";
+import { supabase } from "@/integrations/supabase/client";
+import { listVMs, performVMAction } from "@/lib/api";
 import { INTERVALS } from "@/lib/constants";
 import type { VM, VNCConnection } from "@/lib/types";
 
@@ -83,14 +84,38 @@ function getOptimisticStatus(
 
 export function useVMConsole() {
   return useMutation({
-    mutationFn: ({
+    mutationFn: async ({
       node,
       vmid,
       vmType = "qemu",
+      serverId,
     }: {
       node: string;
       vmid: number;
       vmType?: "qemu" | "lxc";
-    }) => getVMConsole(node, vmid, vmType),
+      serverId?: string;
+    }): Promise<VNCConnection> => {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token) {
+        throw new Error("Not authenticated");
+      }
+
+      const { data, error } = await supabase.functions.invoke("vm-console", {
+        body: { node, vmid, vmType, serverId },
+      });
+
+      if (error) throw error;
+      if (!data) throw new Error("No connection data received");
+      
+      // Build relay URL with JWT for WebSocket connection
+      const jwt = session.access_token;
+      const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || "https://lbfabewnshfjdjfosqxl.supabase.co";
+      const relayUrl = `wss://${supabaseUrl.replace("https://", "")}/functions/v1/vnc-relay?jwt=${jwt}&node=${node}&vmid=${vmid}&type=${vmType}${serverId ? `&serverId=${serverId}` : ''}`;
+
+      return {
+        ...data,
+        relayUrl,
+      };
+    },
   });
 }

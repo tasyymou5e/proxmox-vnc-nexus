@@ -1,6 +1,7 @@
 import { useState, useCallback, useEffect, useRef } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { API_CONFIG } from "@/lib/constants";
+import { useServerRealtimeUpdates } from "./useServerRealtimeUpdates";
 import type { 
   ProxmoxServer, 
   ProxmoxServerInput, 
@@ -27,6 +28,9 @@ export function useProxmoxServers(tenantId?: string) {
   const [error, setError] = useState<string | null>(null);
   const [healthCheckLoading, setHealthCheckLoading] = useState(false);
   const intervalRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Subscribe to real-time updates for immediate status changes
+  useServerRealtimeUpdates(tenantId);
 
   const fetchServers = useCallback(async () => {
     setLoading(true);
