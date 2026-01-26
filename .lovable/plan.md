@@ -1,474 +1,642 @@
 
-# Tenant-Scoped Proxmox Management with Real-Time Stats
+# Comprehensive Tenant Settings, Audit Logging, VM Power Actions, and Advanced Connectivity Features
 
 ## Overview
 
-This plan implements three major features to transform the application from user-scoped to tenant-scoped server management:
+This plan implements six interconnected features:
 
-1. **Real-time VM Statistics on Tenant Dashboard** - Aggregate live data from all connected Proxmox servers
-2. **Tenant-Scoped Server Management** - Servers belong to tenants instead of individual users
-3. **Tenant User Management Page** - Assign users to tenants with admin/manager/viewer roles
-
----
-
-## Current State Analysis
-
-### What Already Exists
-- Multi-tenancy schema: `tenants`, `user_tenant_assignments` tables with RLS
-- `proxmox_servers` table has `tenant_id` column (nullable)
-- Tenant edge function with user assignment actions
-- TenantDashboard with basic stats (currently showing placeholder data)
-- Helper functions: `has_tenant_role()`, `user_has_tenant_access()`
-
-### What Needs to Change
-- Servers are currently scoped by `user_id` - need to scope by `tenant_id`
-- Dashboard stats are not real-time aggregated from Proxmox
-- No dedicated tenant user management page exists
-- Edge functions query by `user_id` instead of `tenant_id`
+1. **Tenant Settings Page** - Manage branding (logo, colors), notification preferences, and default configurations
+2. **Tenant-Level Audit Logging** - Track user actions for compliance (server additions, role changes, VM operations)
+3. **VM Power Actions on Tenant Dashboard** - Role-based VM control (start/stop/restart) for managers
+4. **Automatic Timeout Adjustment** - Learn optimal timeout values from historical connection success rates
+5. **Server Connectivity Test** - Detailed latency and connection path debugging for Tailscale routes
+6. **Connection Retry Logic** - Exponential backoff for intermittent Tailscale connectivity issues
 
 ---
 
 ## Part 1: Database Schema Updates
 
-### 1.1 Make tenant_id Required for Servers
+### 1.1 Tenant Settings Table
+
+New table to store extended tenant configuration:
 
 ```sql
--- First, update any orphaned servers (optional: assign to first admin's first tenant)
--- Then add NOT NULL constraint
-ALTER TABLE public.proxmox_servers 
-ALTER COLUMN tenant_id SET NOT NULL;
+CREATE TABLE public.tenant_settings (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id uuid NOT NULL REFERENCES public.tenants(id) ON DELETE CASCADE UNIQUE,
+  
+  -- Branding
+  primary_color text DEFAULT '#3b82f6',
+  secondary_color text DEFAULT '#1e40af',
+  accent_color text DEFAULT '#f59e0b',
+  
+  -- Notifications
+  notification_email text,
+  notify_on_server_offline boolean DEFAULT true,
+  notify_on_vm_action boolean DEFAULT false,
+  notify_on_user_changes boolean DEFAULT true,
+  
+  -- Default Configurations
+  default_connection_timeout integer DEFAULT 10000,
+  default_verify_ssl boolean DEFAULT true,
+  auto_health_check_interval integer DEFAULT 300000, -- 5 minutes
+  
+  created_at timestamptz DEFAULT now(),
+  updated_at timestamptz DEFAULT now()
+);
 
--- Add index for tenant queries
-CREATE INDEX IF NOT EXISTS idx_proxmox_servers_tenant ON public.proxmox_servers(tenant_id);
-```
+ALTER TABLE public.tenant_settings ENABLE ROW LEVEL SECURITY;
 
-### 1.2 Update RLS Policies for Tenant-Scoped Access
-
-**proxmox_servers Table - New Policies:**
-
-| Policy | Command | Logic |
-|--------|---------|-------|
-| "Users can view servers in their tenants" | SELECT | User has any role in the server's tenant |
-| "Tenant admins/managers can insert servers" | INSERT | User has admin or manager role in the target tenant |
-| "Tenant admins/managers can update servers" | UPDATE | User has admin or manager role in the server's tenant |
-| "Tenant admins can delete servers" | DELETE | User has admin role in the server's tenant |
-| "System admins can manage all servers" | ALL | User has system admin role |
-
-```sql
--- Drop existing user-based policies
-DROP POLICY IF EXISTS "Users can view their own servers" ON public.proxmox_servers;
-DROP POLICY IF EXISTS "Users can insert their own servers" ON public.proxmox_servers;
--- ... etc
-
--- Create tenant-based policies
-CREATE POLICY "Users can view tenant servers"
-  ON public.proxmox_servers FOR SELECT
+-- RLS Policies
+CREATE POLICY "Users can view their tenant settings"
+  ON public.tenant_settings FOR SELECT
   USING (
     has_role(auth.uid(), 'admin') OR 
     user_has_tenant_access(auth.uid(), tenant_id)
   );
 
-CREATE POLICY "Tenant admins/managers can insert servers"
-  ON public.proxmox_servers FOR INSERT
-  WITH CHECK (
-    has_role(auth.uid(), 'admin') OR 
-    has_tenant_role(auth.uid(), tenant_id, ARRAY['admin', 'manager']::tenant_role[])
-  );
-
-CREATE POLICY "Tenant admins/managers can update servers"
-  ON public.proxmox_servers FOR UPDATE
-  USING (
-    has_role(auth.uid(), 'admin') OR 
-    has_tenant_role(auth.uid(), tenant_id, ARRAY['admin', 'manager']::tenant_role[])
-  );
-
-CREATE POLICY "Tenant admins can delete servers"
-  ON public.proxmox_servers FOR DELETE
+CREATE POLICY "Tenant admins can update settings"
+  ON public.tenant_settings FOR UPDATE
   USING (
     has_role(auth.uid(), 'admin') OR 
     has_tenant_role(auth.uid(), tenant_id, ARRAY['admin']::tenant_role[])
   );
 ```
 
+### 1.2 Audit Log Table
+
+New table for compliance tracking:
+
+```sql
+CREATE TABLE public.audit_logs (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id uuid NOT NULL REFERENCES public.tenants(id) ON DELETE CASCADE,
+  user_id uuid NOT NULL,
+  
+  -- Action details
+  action_type text NOT NULL, -- 'server_added', 'server_deleted', 'role_changed', 'vm_started', 'vm_stopped', 'user_invited', 'user_removed', 'settings_updated'
+  resource_type text NOT NULL, -- 'server', 'vm', 'user', 'settings'
+  resource_id text,
+  resource_name text,
+  
+  -- Additional context
+  details jsonb DEFAULT '{}',
+  ip_address text,
+  user_agent text,
+  
+  created_at timestamptz DEFAULT now()
+);
+
+-- Index for efficient queries
+CREATE INDEX idx_audit_logs_tenant_created ON public.audit_logs(tenant_id, created_at DESC);
+CREATE INDEX idx_audit_logs_action_type ON public.audit_logs(tenant_id, action_type, created_at DESC);
+
+ALTER TABLE public.audit_logs ENABLE ROW LEVEL SECURITY;
+
+-- Only admins and tenant admins can view audit logs
+CREATE POLICY "Tenant admins can view audit logs"
+  ON public.audit_logs FOR SELECT
+  USING (
+    has_role(auth.uid(), 'admin') OR 
+    has_tenant_role(auth.uid(), tenant_id, ARRAY['admin']::tenant_role[])
+  );
+```
+
+### 1.3 Connection Metrics Table
+
+For learning optimal timeout values:
+
+```sql
+CREATE TABLE public.connection_metrics (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  server_id uuid NOT NULL REFERENCES public.proxmox_servers(id) ON DELETE CASCADE,
+  
+  -- Connection attempt details
+  success boolean NOT NULL,
+  response_time_ms integer, -- Only for successful connections
+  error_message text,
+  
+  -- Connection context
+  used_tailscale boolean DEFAULT false,
+  timeout_used_ms integer,
+  retry_count integer DEFAULT 0,
+  
+  created_at timestamptz DEFAULT now()
+);
+
+-- Keep only last 30 days of metrics
+CREATE INDEX idx_connection_metrics_server_created ON public.connection_metrics(server_id, created_at DESC);
+
+-- Add columns to proxmox_servers for learned timeout
+ALTER TABLE public.proxmox_servers 
+ADD COLUMN IF NOT EXISTS learned_timeout_ms integer,
+ADD COLUMN IF NOT EXISTS avg_response_time_ms integer,
+ADD COLUMN IF NOT EXISTS success_rate numeric(5,2);
+```
+
 ---
 
 ## Part 2: Edge Function Updates
 
-### 2.1 Update proxmox-servers Edge Function
+### 2.1 New Audit Logging Edge Function
 
-**File: `supabase/functions/proxmox-servers/index.ts`**
-
-Change from user-scoped to tenant-scoped queries:
+**File: `supabase/functions/audit-log/index.ts`** (New)
 
 ```typescript
-// ADD: Accept tenantId parameter
-interface ServerRequest {
-  tenantId?: string;
-  // ...existing fields
+interface AuditLogRequest {
+  tenantId: string;
+  actionType: string;
+  resourceType: string;
+  resourceId?: string;
+  resourceName?: string;
+  details?: Record<string, unknown>;
 }
 
-// CHANGE: All queries filter by tenant_id instead of user_id
-// For GET (list servers):
-const { data: servers } = await supabase
-  .from("proxmox_servers")
-  .select("*")
-  .eq("tenant_id", tenantId)  // Changed from user_id
-  .order("created_at", { ascending: false });
+// Actions:
+// - 'log': Create a new audit log entry
+// - 'list': Get audit logs with pagination and filters
+// - 'export': Export audit logs as CSV
 
-// For POST (create server):
-const insertData = {
-  tenant_id: tenantId,  // Changed from user_id
-  // ...other fields
-};
-
-// VALIDATE: Check user has tenant access before operations
-const hasAccess = await checkTenantAccess(supabase, userId, tenantId, ['admin', 'manager']);
-if (!hasAccess) {
-  return new Response(JSON.stringify({ error: "Access denied" }), { status: 403 });
+// Example entry:
+{
+  action_type: 'vm_started',
+  resource_type: 'vm',
+  resource_id: '101',
+  resource_name: 'Web Server',
+  details: { node: 'pve1', vmType: 'qemu', initiatedBy: 'user@email.com' }
 }
 ```
 
-### 2.2 Update list-vms Edge Function
+### 2.2 Enhanced VM Actions with Audit Logging
 
-**File: `supabase/functions/list-vms/index.ts`**
+**File: `supabase/functions/vm-actions/index.ts`** (Update)
 
-Add tenant filtering:
+Add tenant context and audit logging:
 
 ```typescript
-interface ListVMsRequest {
-  tenantId?: string;
-  serverId?: string;
+// After successful VM action:
+if (tenantId) {
+  await supabase.from("audit_logs").insert({
+    tenant_id: tenantId,
+    user_id: userId,
+    action_type: `vm_${action}`,
+    resource_type: 'vm',
+    resource_id: String(vmid),
+    resource_name: vmName || `VM ${vmid}`,
+    details: { node, vmType, serverId, serverName },
+    ip_address: req.headers.get('x-forwarded-for'),
+    user_agent: req.headers.get('user-agent'),
+  });
 }
-
-// Query servers by tenant
-const { data: servers } = await supabase
-  .from("proxmox_servers")
-  .select("*")
-  .eq("tenant_id", tenantId)
-  .eq("is_active", true);
 ```
 
-### 2.3 Create Real-Time Stats Edge Function
+### 2.3 Tenant Settings Edge Function
 
-**File: `supabase/functions/tenant-stats/index.ts`** (New)
+**File: `supabase/functions/tenant-settings/index.ts`** (New)
 
-Aggregate live statistics from all tenant servers:
+Actions:
+- `get`: Retrieve tenant settings (creates default if not exists)
+- `update`: Update tenant settings with audit logging
+
+### 2.4 Enhanced Connectivity Test Edge Function
+
+**File: `supabase/functions/connectivity-test/index.ts`** (New)
+
+Returns detailed connection diagnostics:
 
 ```typescript
-// Actions: 'get-live-stats', 'get-resource-usage', 'get-node-status'
+interface ConnectivityTestResult {
+  success: boolean;
+  
+  // Timing breakdown
+  dnsResolutionMs: number;
+  tcpConnectionMs: number;
+  tlsHandshakeMs: number;
+  apiResponseMs: number;
+  totalLatencyMs: number;
+  
+  // Connection path
+  resolvedIp: string;
+  connectionType: 'direct' | 'tailscale' | 'funnel';
+  
+  // Tailscale-specific info (if applicable)
+  tailscaleInfo?: {
+    derp: string;       // DERP relay server used
+    path: string;       // 'direct' or 'relayed'
+    latencyMeasurements: number[];
+  };
+  
+  // Server info
+  proxmoxVersion?: string;
+  nodeCount?: number;
+  
+  // Errors
+  error?: string;
+  errorStage?: 'dns' | 'tcp' | 'tls' | 'api';
+}
+```
 
-// Fetch data from all active servers in parallel
-const servers = await getTenantServers(tenantId);
-const results = await Promise.all(servers.map(async (server) => {
-  // Call Proxmox API for each server
-  const [resources, nodes] = await Promise.all([
-    fetchProxmoxApi(server, '/cluster/resources'),
-    fetchProxmoxApi(server, '/nodes'),
-  ]);
-  return { serverId: server.id, resources, nodes };
-}));
+### 2.5 Connection Metrics Learning Edge Function
 
-// Aggregate stats
-const stats = {
-  totalVMs: 0,
-  runningVMs: 0,
-  totalContainers: 0,
-  runningContainers: 0,
-  cpuUsage: { used: 0, total: 0 },
-  memoryUsage: { used: 0, total: 0 },
-  storageUsage: { used: 0, total: 0 },
-  nodes: { online: 0, offline: 0 },
-};
+**File: `supabase/functions/connection-metrics/index.ts`** (New)
 
-// Process each server's data...
+Actions:
+- `record`: Record a connection attempt (success/failure)
+- `calculate-optimal`: Calculate optimal timeout based on historical data
+- `cleanup`: Remove metrics older than 30 days
+
+Algorithm for optimal timeout:
+```typescript
+// Calculate optimal timeout: p95 response time + 50% buffer, min 5s, max 120s
+const p95ResponseTime = calculatePercentile(responseTimes, 95);
+const optimalTimeout = Math.max(5000, Math.min(120000, p95ResponseTime * 1.5));
+```
+
+### 2.6 Enhanced proxmox-servers with Retry Logic
+
+**File: `supabase/functions/proxmox-servers/index.ts`** (Update)
+
+Add exponential backoff retry:
+
+```typescript
+async function fetchWithRetry(
+  url: string,
+  options: RequestInit,
+  maxRetries: number = 3,
+  baseDelayMs: number = 1000
+): Promise<Response> {
+  let lastError: Error | null = null;
+  
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      const response = await fetch(url, options);
+      
+      // Record success metric
+      await recordConnectionMetric(serverId, true, responseTime);
+      
+      return response;
+    } catch (error) {
+      lastError = error;
+      
+      // Record failure metric
+      await recordConnectionMetric(serverId, false, null, error.message);
+      
+      if (attempt < maxRetries) {
+        // Exponential backoff: 1s, 2s, 4s...
+        const delay = baseDelayMs * Math.pow(2, attempt);
+        const jitter = delay * 0.2 * Math.random();
+        await new Promise(r => setTimeout(r, delay + jitter));
+      }
+    }
+  }
+  
+  throw lastError;
+}
 ```
 
 ---
 
-## Part 3: Frontend Hook Updates
+## Part 3: Frontend Components
 
-### 3.1 Update useProxmoxServers Hook
+### 3.1 Tenant Settings Page
 
-**File: `src/hooks/useProxmoxServers.ts`**
+**File: `src/pages/TenantSettings.tsx`** (New)
 
-Add tenantId parameter to all operations:
+```text
++------------------------------------------------------------------+
+| Settings - ACME Corp                               [Save Changes] |
++------------------------------------------------------------------+
+|                                                                   |
+|  ===== Branding =====                                            |
+|  Logo: [Upload Logo] or [Current: logo.png]                      |
+|  Primary Color:   [#3b82f6] [Color Picker]                       |
+|  Secondary Color: [#1e40af] [Color Picker]                       |
+|  Accent Color:    [#f59e0b] [Color Picker]                       |
+|                                                                   |
+|  ===== Notifications =====                                       |
+|  Notification Email: [admin@company.com]                         |
+|  [x] Server goes offline                                         |
+|  [ ] VM power actions                                            |
+|  [x] User role changes                                           |
+|                                                                   |
+|  ===== Default Configurations =====                              |
+|  Default Connection Timeout: [30] seconds                        |
+|  Default SSL Verification: [x] Enabled                           |
+|  Health Check Interval: [5] minutes                              |
+|                                                                   |
++------------------------------------------------------------------+
+```
+
+Features:
+- Color picker components for branding
+- Logo upload with storage integration
+- Notification preferences toggle
+- Default timeout/SSL settings
+- Auto-save with toast notifications
+
+### 3.2 Audit Log Viewer
+
+**File: `src/pages/TenantAuditLog.tsx`** (New)
+
+```text
++------------------------------------------------------------------+
+| Audit Log - ACME Corp                         [Export CSV]       |
++------------------------------------------------------------------+
+| Filters: [Action Type ▼] [Resource ▼] [Date Range]  [Search...] |
++------------------------------------------------------------------+
+| Time          | User         | Action       | Resource    | Details|
+|---------------|--------------|--------------|-------------|--------|
+| 10:32 AM      | john@...     | VM Started   | Web Server  | [View] |
+| 10:15 AM      | jane@...     | Role Changed | bob@...     | [View] |
+| 09:45 AM      | john@...     | Server Added | Production  | [View] |
+| 09:30 AM      | admin@...    | Settings     | Branding    | [View] |
++------------------------------------------------------------------+
+| [< Previous]                Page 1 of 12            [Next >]     |
++------------------------------------------------------------------+
+```
+
+Features:
+- Filterable by action type, resource, date range
+- Search by user or resource name
+- Expandable details view
+- CSV export functionality
+- Pagination (50 items per page)
+
+### 3.3 Enhanced Tenant Dashboard with VM Actions
+
+**File: `src/pages/TenantDashboard.tsx`** (Update)
+
+Add a new VM Quick Actions section:
+
+```text
+| Recent VMs                                      |
+| +---------------------------------------------+ |
+| | Web Server (101)  [Running]  [■Stop] [↺]   | |
+| | Database (102)    [Running]  [■Stop] [↺]   | |
+| | Dev Server (103)  [Stopped]  [▶Start]      | |
+| +---------------------------------------------+ |
+| [View All VMs →]                                |
+```
+
+Components to add:
+- `VMQuickActions` - Inline VM power controls
+- Permission-based button visibility (managers+)
+- Optimistic updates with status indicators
+- Confirmation dialog for stop/restart
+
+### 3.4 Server Connectivity Test Dialog
+
+**File: `src/components/servers/ConnectivityTestDialog.tsx`** (New)
+
+```text
++--------------------------------------------------+
+|  Connection Test - Production Server             |
++--------------------------------------------------+
+|  Status: ✓ Connected                             |
+|                                                  |
+|  Timing Breakdown:                               |
+|  ├─ DNS Resolution:     12ms                     |
+|  ├─ TCP Connection:     45ms                     |
+|  ├─ TLS Handshake:      89ms                     |
+|  └─ API Response:       156ms                    |
+|  ─────────────────────────────                   |
+|  Total Latency:         302ms                    |
+|                                                  |
+|  Connection Path:                                |
+|  └─ Type: Tailscale (relayed via fra-1)         |
+|     IP: 100.64.x.x                              |
+|     DERP: Frankfurt (30ms)                      |
+|                                                  |
+|  Recommended Timeout: 35 seconds                 |
+|  [Apply Recommendation] [Run Again] [Close]     |
++--------------------------------------------------+
+```
+
+Features:
+- Step-by-step timing breakdown
+- Tailscale path detection
+- Recommended timeout based on measurements
+- "Apply Recommendation" button to update server config
+
+### 3.5 Connection Retry Status Indicator
+
+**File: `src/components/servers/ConnectionStatus.tsx`** (Update)
+
+Add retry indicator:
+
+```tsx
+{isRetrying && (
+  <div className="flex items-center gap-2 text-amber-500">
+    <RefreshCw className="h-4 w-4 animate-spin" />
+    <span className="text-xs">Retry {currentRetry}/3...</span>
+  </div>
+)}
+```
+
+---
+
+## Part 4: New Hooks
+
+### 4.1 useTenantSettings Hook
+
+**File: `src/hooks/useTenantSettings.ts`** (New)
 
 ```typescript
-export function useProxmoxServers(tenantId?: string) {
-  // Pass tenantId to all API calls
-  const fetchServers = useCallback(async () => {
-    const response = await fetch(
-      `${API_CONFIG.SUPABASE_URL}${API_CONFIG.FUNCTIONS_PATH}/proxmox-servers`,
-      {
-        method: "GET",
-        headers,
-        body: tenantId ? JSON.stringify({ tenantId }) : undefined,
-      }
-    );
-  }, [tenantId]);
-  
-  // ... similar changes for create, update, delete
+export function useTenantSettings(tenantId: string | undefined) {
+  const query = useQuery({
+    queryKey: ["tenant-settings", tenantId],
+    queryFn: async () => fetchTenantSettings(tenantId),
+    enabled: !!tenantId,
+  });
+
+  const mutation = useMutation({
+    mutationFn: updateTenantSettings,
+    onSuccess: () => {
+      queryClient.invalidateQueries(["tenant-settings", tenantId]);
+      toast({ title: "Settings saved" });
+    },
+  });
+
+  return { settings: query.data, isLoading: query.isLoading, updateSettings: mutation };
 }
 ```
 
-### 3.2 Create useTenantStats Hook
+### 4.2 useAuditLogs Hook
 
-**File: `src/hooks/useTenantStats.ts`** (Enhanced)
-
-Real-time statistics with auto-refresh:
+**File: `src/hooks/useAuditLogs.ts`** (New)
 
 ```typescript
-export function useLiveTenantStats(tenantId: string) {
+export function useAuditLogs(tenantId: string | undefined, filters: AuditLogFilters) {
   return useQuery({
-    queryKey: ["tenant-live-stats", tenantId],
-    queryFn: async () => {
-      const response = await supabase.functions.invoke("tenant-stats", {
-        body: { action: "get-live-stats", tenantId },
-      });
-      return response.data.stats;
-    },
-    refetchInterval: 10000, // Refresh every 10 seconds
+    queryKey: ["audit-logs", tenantId, filters],
+    queryFn: () => fetchAuditLogs(tenantId, filters),
     enabled: !!tenantId,
+    keepPreviousData: true, // For pagination
+  });
+}
+```
+
+### 4.3 useTenantVMs Hook
+
+**File: `src/hooks/useTenantVMs.ts`** (New)
+
+For tenant-scoped VM listing and actions:
+
+```typescript
+export function useTenantVMs(tenantId: string | undefined) {
+  const vmsQuery = useQuery({
+    queryKey: ["tenant-vms", tenantId],
+    queryFn: () => listVMs({ tenantId }),
+    refetchInterval: 10000,
+    enabled: !!tenantId,
+  });
+
+  const vmActionMutation = useMutation({
+    mutationFn: ({ vmid, node, action, tenantId }) => 
+      performVMAction(node, vmid, action, "qemu", tenantId),
+    onSuccess: () => {
+      queryClient.invalidateQueries(["tenant-vms", tenantId]);
+    },
+  });
+
+  return { vms: vmsQuery.data, vmAction: vmActionMutation };
+}
+```
+
+### 4.4 useConnectivityTest Hook
+
+**File: `src/hooks/useConnectivityTest.ts`** (New)
+
+```typescript
+export function useConnectivityTest() {
+  return useMutation({
+    mutationFn: (serverId: string) => runConnectivityTest(serverId),
   });
 }
 ```
 
 ---
 
-## Part 4: Tenant User Management Page
+## Part 5: Type Updates
 
-### 4.1 New Page Component
+**File: `src/lib/types.ts`**
 
-**File: `src/pages/TenantUsers.tsx`** (New)
-
-A dedicated page to manage tenant user assignments:
-
-```text
-+------------------------------------------------------------------+
-| Tenant Users - ACME Corp                    [Back] [Add User]    |
-+------------------------------------------------------------------+
-| Search users...                                                   |
-+------------------------------------------------------------------+
-| User                  | Email                | Role    | Actions  |
-|----------------------|---------------------|---------|----------|
-| John Doe             | john@example.com    | Admin   | [▼]      |
-| Jane Smith           | jane@example.com    | Manager | [▼]      |
-| Bob Wilson           | bob@example.com     | Viewer  | [▼]      |
-+------------------------------------------------------------------+
-```
-
-**Features:**
-- List all users assigned to the tenant with their roles
-- Add new user by email with role selection
-- Change user role (Admin → Manager → Viewer)
-- Remove user from tenant
-- Role badges with colors (Admin: Red, Manager: Orange, Viewer: Blue)
-
-### 4.2 Component Structure
-
-```tsx
-export default function TenantUsers() {
-  const { tenantId } = useParams();
-  const { users, isLoading, assignUser, removeUser } = useTenantUsers(tenantId);
-  
-  return (
-    <TenantLayout>
-      <div className="p-6 space-y-6">
-        {/* Header with Add User button */}
-        <div className="flex items-center justify-between">
-          <h1>Manage Users</h1>
-          <AddUserDialog tenantId={tenantId} />
-        </div>
-        
-        {/* Users Table */}
-        <Table>
-          <TableHeader>...</TableHeader>
-          <TableBody>
-            {users.map(user => (
-              <TableRow key={user.id}>
-                <TableCell>{user.profiles.full_name || user.profiles.email}</TableCell>
-                <TableCell>{user.profiles.email}</TableCell>
-                <TableCell><RoleBadge role={user.role} /></TableCell>
-                <TableCell>
-                  <UserActionsMenu 
-                    user={user} 
-                    onChangeRole={...} 
-                    onRemove={...} 
-                  />
-                </TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      </div>
-    </TenantLayout>
-  );
+```typescript
+// Tenant Settings
+export interface TenantSettings {
+  id: string;
+  tenant_id: string;
+  primary_color: string;
+  secondary_color: string;
+  accent_color: string;
+  notification_email: string | null;
+  notify_on_server_offline: boolean;
+  notify_on_vm_action: boolean;
+  notify_on_user_changes: boolean;
+  default_connection_timeout: number;
+  default_verify_ssl: boolean;
+  auto_health_check_interval: number;
+  created_at: string;
+  updated_at: string;
 }
-```
 
-### 4.3 Add User Dialog
+// Audit Logs
+export interface AuditLog {
+  id: string;
+  tenant_id: string;
+  user_id: string;
+  action_type: AuditActionType;
+  resource_type: 'server' | 'vm' | 'user' | 'settings';
+  resource_id: string | null;
+  resource_name: string | null;
+  details: Record<string, unknown>;
+  ip_address: string | null;
+  user_agent: string | null;
+  created_at: string;
+  user?: {
+    email: string;
+    full_name: string | null;
+  };
+}
 
-```tsx
-function AddUserDialog({ tenantId }: { tenantId: string }) {
-  const [email, setEmail] = useState("");
-  const [role, setRole] = useState<TenantRole>("viewer");
-  const { assignUser } = useTenantUsers(tenantId);
-  const { data: allUsers } = useAllProfiles(); // For autocomplete
-  
-  return (
-    <Dialog>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>Add User to Tenant</DialogTitle>
-        </DialogHeader>
-        
-        {/* Email/User search with autocomplete */}
-        <Combobox 
-          options={allUsers} 
-          onSelect={setEmail}
-          placeholder="Search by email..."
-        />
-        
-        {/* Role selector */}
-        <Select value={role} onValueChange={setRole}>
-          <SelectItem value="admin">Admin - Full access</SelectItem>
-          <SelectItem value="manager">Manager - Can manage servers</SelectItem>
-          <SelectItem value="viewer">Viewer - Read-only access</SelectItem>
-        </Select>
-        
-        <Button onClick={() => assignUser({ userId, role })}>
-          Add User
-        </Button>
-      </DialogContent>
-    </Dialog>
-  );
+export type AuditActionType = 
+  | 'server_added' | 'server_deleted' | 'server_updated'
+  | 'vm_started' | 'vm_stopped' | 'vm_restarted' | 'vm_shutdown'
+  | 'user_invited' | 'user_removed' | 'role_changed'
+  | 'settings_updated';
+
+// Connectivity Test
+export interface ConnectivityTestResult {
+  success: boolean;
+  dnsResolutionMs: number;
+  tcpConnectionMs: number;
+  tlsHandshakeMs: number;
+  apiResponseMs: number;
+  totalLatencyMs: number;
+  resolvedIp: string;
+  connectionType: 'direct' | 'tailscale' | 'funnel';
+  tailscaleInfo?: {
+    derp: string;
+    path: string;
+    latencyMeasurements: number[];
+  };
+  proxmoxVersion?: string;
+  nodeCount?: number;
+  error?: string;
+  errorStage?: 'dns' | 'tcp' | 'tls' | 'api';
+  recommendedTimeoutMs: number;
+}
+
+// Connection Metrics
+export interface ConnectionMetric {
+  id: string;
+  server_id: string;
+  success: boolean;
+  response_time_ms: number | null;
+  error_message: string | null;
+  used_tailscale: boolean;
+  timeout_used_ms: number;
+  retry_count: number;
+  created_at: string;
+}
+
+// Extended ProxmoxServer
+export interface ProxmoxServer {
+  // ...existing fields
+  learned_timeout_ms: number | null;
+  avg_response_time_ms: number | null;
+  success_rate: number | null;
 }
 ```
 
 ---
 
-## Part 5: Update TenantDashboard with Real-Time Stats
-
-### 5.1 Enhanced Dashboard Layout
-
-**File: `src/pages/TenantDashboard.tsx`**
-
-```text
-+------------------------------------------------------------------+
-| ACME Corp Environment                   [Refresh] [Servers]      |
-+------------------------------------------------------------------+
-| Stats Grid (Auto-updating every 10s)                              |
-| +--------+  +--------+  +--------+  +--------+                   |
-| | Nodes  |  | VMs    |  | LXC    |  | Servers|                   |
-| | 3 🟢   |  | 24▶ 5■ |  | 8▶ 2■  |  | 4 🟢   |                   |
-| +--------+  +--------+  +--------+  +--------+                   |
-|                                                                   |
-| Resource Usage (Live)                                             |
-| +------------------+  +------------------+  +------------------+ |
-| | CPU: 45%         |  | Memory: 78%      |  | Storage: 24%     | |
-| | [========     ]  |  | [===========  ]  |  | [====          ] | |
-| | 14.4 / 32 cores  |  | 62.4 / 80 GB     |  | 2.4 / 10 TB      | |
-| +------------------+  +------------------+  +------------------+ |
-|                                                                   |
-| Node Status                                                       |
-| +------------------+  +------------------+  +------------------+ |
-| | pve1.local  🟢   |  | pve2.local  🟢   |  | pve3.local  🟢   | |
-| | CPU: 32% Mem:65% |  | CPU: 45% Mem:82% |  | CPU: 58% Mem:71% | |
-| +------------------+  +------------------+  +------------------+ |
-+------------------------------------------------------------------+
-```
-
-### 5.2 Real-Time Data Integration
-
-```tsx
-export default function TenantDashboard() {
-  const { tenantId } = useParams();
-  
-  // Real-time stats with 10s refresh
-  const { data: liveStats, isLoading: isStatsLoading } = useLiveTenantStats(tenantId);
-  
-  // Cluster resources with 15s refresh  
-  const { data: resources, refetch } = useClusterResources(tenantId);
-  
-  // Nodes with 30s refresh
-  const { data: nodes } = useNodes(tenantId);
-  
-  return (
-    <TenantLayout>
-      {/* Auto-refresh indicator */}
-      <div className="flex items-center gap-2 text-xs text-muted-foreground">
-        <Activity className="h-3 w-3 animate-pulse text-green-500" />
-        Live updates enabled
-      </div>
-      
-      {/* Stats using liveStats data */}
-      <StatCard
-        title="Virtual Machines"
-        value={liveStats?.totalVMs || 0}
-        subValue={`${liveStats?.runningVMs || 0} running`}
-        icon={Server}
-      />
-      
-      {/* Resource bars using real-time data */}
-      <ResourceCard
-        title="CPU Usage"
-        used={liveStats?.cpuUsage.used || 0}
-        total={liveStats?.cpuUsage.total || 1}
-        unit="cores"
-        icon={Cpu}
-      />
-    </TenantLayout>
-  );
-}
-```
-
----
-
-## Part 6: Update ProxmoxServers Page for Tenant Context
-
-### 6.1 Accept Tenant Parameter
-
-**File: `src/pages/ProxmoxServers.tsx`**
-
-```tsx
-interface ProxmoxServersProps {
-  tenantId?: string;
-  hideLayout?: boolean;
-}
-
-export default function ProxmoxServers({ tenantId, hideLayout }: ProxmoxServersProps) {
-  // Use tenant-scoped hook
-  const { servers, createServer, ... } = useProxmoxServers(tenantId);
-  
-  // Validate user has permission to add servers
-  const { canManageServers } = useTenantPermissions(tenantId);
-  
-  // Hide Add Server button if user doesn't have manager+ role
-  {canManageServers && (
-    <Button onClick={() => handleOpenDialog()}>
-      <Plus className="h-4 w-4 mr-2" />
-      Add Server
-    </Button>
-  )}
-}
-```
-
----
-
-## Part 7: New Routes
-
-### 7.1 Add Tenant Users Route
+## Part 6: Routes Update
 
 **File: `src/App.tsx`**
 
+Add new routes:
+
 ```tsx
-// Add new route for tenant user management
+// Tenant Settings
 <Route
-  path="/tenants/:tenantId/users"
+  path="/tenants/:tenantId/settings"
   element={
     <ProtectedRoute>
       <Suspense fallback={<PageLoader />}>
-        <TenantUsers />
+        <TenantSettings />
+      </Suspense>
+    </ProtectedRoute>
+  }
+/>
+
+// Audit Logs
+<Route
+  path="/tenants/:tenantId/audit-log"
+  element={
+    <ProtectedRoute>
+      <Suspense fallback={<PageLoader />}>
+        <TenantAuditLog />
       </Suspense>
     </ProtectedRoute>
   }
@@ -477,63 +645,26 @@ export default function ProxmoxServers({ tenantId, hideLayout }: ProxmoxServersP
 
 ---
 
-## Part 8: Type Updates
+## Part 7: Update useTenantPermissions
 
-### 8.1 Extended Types
+**File: `src/hooks/useTenantPermissions.ts`** (Update)
 
-**File: `src/lib/types.ts`**
+Add new permission flags:
 
 ```typescript
-// Enhanced tenant stats with live data
-export interface LiveTenantStats {
-  totalVMs: number;
-  runningVMs: number;
-  stoppedVMs: number;
-  totalContainers: number;
-  runningContainers: number;
-  nodes: {
-    total: number;
-    online: number;
-    offline: number;
-  };
-  cpuUsage: {
-    used: number;
-    total: number;
-    percentage: number;
-  };
-  memoryUsage: {
-    used: number;
-    total: number;
-    percentage: number;
-  };
-  storageUsage: {
-    used: number;
-    total: number;
-    percentage: number;
-  };
-  servers: {
-    total: number;
-    online: number;
-    offline: number;
-  };
-  lastUpdated: string;
+interface TenantPermissions {
+  // ...existing
+  canManageVMs: boolean;        // manager or admin
+  canViewAuditLogs: boolean;    // admin only
+  canManageSettings: boolean;   // admin only
 }
 
-// Tenant user with profile info
-export interface TenantUserAssignment {
-  id: string;
-  user_id: string;
-  tenant_id: string;
-  role: TenantRole;
-  created_at: string;
-  profile: {
-    id: string;
-    email: string;
-    full_name: string | null;
-    username: string | null;
-    avatar_url: string | null;
-  };
-}
+return {
+  // ...existing
+  canManageVMs: role === "admin" || role === "manager",
+  canViewAuditLogs: role === "admin",
+  canManageSettings: role === "admin",
+};
 ```
 
 ---
@@ -542,38 +673,74 @@ export interface TenantUserAssignment {
 
 | Step | Task | Files |
 |------|------|-------|
-| 1 | Database migration for tenant-scoped RLS | SQL migration |
-| 2 | Update types with LiveTenantStats | `src/lib/types.ts` |
-| 3 | Create tenant-stats edge function | `supabase/functions/tenant-stats/index.ts` |
-| 4 | Update proxmox-servers edge function | `supabase/functions/proxmox-servers/index.ts` |
-| 5 | Update list-vms edge function | `supabase/functions/list-vms/index.ts` |
-| 6 | Update tenants edge function for user lookups | `supabase/functions/tenants/index.ts` |
-| 7 | Update useProxmoxServers hook | `src/hooks/useProxmoxServers.ts` |
-| 8 | Create useTenantPermissions hook | `src/hooks/useTenantPermissions.ts` |
-| 9 | Enhance useTenants hook | `src/hooks/useTenants.ts` |
-| 10 | Create TenantUsers page | `src/pages/TenantUsers.tsx` |
-| 11 | Update TenantDashboard with live stats | `src/pages/TenantDashboard.tsx` |
-| 12 | Update ProxmoxServers for tenant context | `src/pages/ProxmoxServers.tsx` |
-| 13 | Add route for tenant users | `src/App.tsx` |
-| 14 | Deploy edge functions | Deployment |
+| 1 | Database migration for settings, audit, metrics | SQL migration |
+| 2 | Update types | `src/lib/types.ts` |
+| 3 | Create audit-log edge function | `supabase/functions/audit-log/index.ts` |
+| 4 | Create tenant-settings edge function | `supabase/functions/tenant-settings/index.ts` |
+| 5 | Create connectivity-test edge function | `supabase/functions/connectivity-test/index.ts` |
+| 6 | Create connection-metrics edge function | `supabase/functions/connection-metrics/index.ts` |
+| 7 | Update vm-actions with audit logging | `supabase/functions/vm-actions/index.ts` |
+| 8 | Update proxmox-servers with retry logic | `supabase/functions/proxmox-servers/index.ts` |
+| 9 | Create useTenantSettings hook | `src/hooks/useTenantSettings.ts` |
+| 10 | Create useAuditLogs hook | `src/hooks/useAuditLogs.ts` |
+| 11 | Create useTenantVMs hook | `src/hooks/useTenantVMs.ts` |
+| 12 | Create useConnectivityTest hook | `src/hooks/useConnectivityTest.ts` |
+| 13 | Update useTenantPermissions | `src/hooks/useTenantPermissions.ts` |
+| 14 | Create TenantSettings page | `src/pages/TenantSettings.tsx` |
+| 15 | Create TenantAuditLog page | `src/pages/TenantAuditLog.tsx` |
+| 16 | Create ConnectivityTestDialog | `src/components/servers/ConnectivityTestDialog.tsx` |
+| 17 | Update TenantDashboard with VM actions | `src/pages/TenantDashboard.tsx` |
+| 18 | Add new routes | `src/App.tsx` |
+| 19 | Update navigation links | `src/components/layout/TenantLayout.tsx` |
+| 20 | Deploy edge functions | Deployment |
 
 ---
 
 ## Security Considerations
 
-1. **Role-Based Access Control**
-   - Viewers: Read-only access to servers and VMs
-   - Managers: Can add/edit servers, start/stop VMs
-   - Admins: Full control including user management and server deletion
+1. **Audit Log Immutability**: Audit logs are INSERT-only with no UPDATE/DELETE policies
+2. **Role-Based Access**: 
+   - Settings: Admin only
+   - Audit logs: Admin only (for compliance)
+   - VM actions: Manager and Admin
+3. **Connection Metrics Privacy**: Metrics tied to server, not exposed to non-tenant users
+4. **Timeout Limits**: Max 120 seconds to prevent abuse
 
-2. **Tenant Isolation**
-   - RLS policies ensure users only see servers in their assigned tenants
-   - Edge functions validate tenant access before all operations
-   - No cross-tenant data leakage possible
+---
 
-3. **System Admin Override**
-   - System admins (from `user_roles` table) can access all tenants
-   - Used for support and troubleshooting
+## Retry Logic Algorithm
+
+```text
+Attempt 1: Immediate
+  ↓ fail
+Wait: 1000ms + random(0-200ms)
+Attempt 2:
+  ↓ fail
+Wait: 2000ms + random(0-400ms)
+Attempt 3:
+  ↓ fail
+Wait: 4000ms + random(0-800ms)
+Attempt 4 (final):
+  ↓ fail
+Return error with all attempt details
+```
+
+---
+
+## Timeout Learning Algorithm
+
+```text
+For each server:
+1. Collect last 100 successful connections
+2. Calculate P95 response time
+3. Add 50% buffer
+4. Clamp between 5s and 120s
+5. Store as learned_timeout_ms
+6. Use learned timeout if:
+   - At least 10 successful connections
+   - Success rate > 80%
+   Otherwise, use configured timeout
+```
 
 ---
 
@@ -581,13 +748,18 @@ export interface TenantUserAssignment {
 
 | Component | Changes |
 |-----------|---------|
-| **Database** | Update RLS policies from user-scoped to tenant-scoped |
-| **tenant-stats** | New edge function for real-time aggregated stats |
-| **proxmox-servers** | Accept tenantId, query by tenant instead of user |
-| **list-vms** | Filter VMs by tenant's servers |
-| **tenants** | Add user lookup action for autocomplete |
-| **TenantUsers** | New page for managing tenant user assignments |
-| **TenantDashboard** | Real-time stats with 10s auto-refresh |
-| **ProxmoxServers** | Accept tenantId prop, permission-based UI |
-| **Types** | LiveTenantStats, TenantUserAssignment interfaces |
-| **Routes** | Add /tenants/:tenantId/users route |
+| **Database** | Add `tenant_settings`, `audit_logs`, `connection_metrics` tables |
+| **proxmox_servers** | Add `learned_timeout_ms`, `avg_response_time_ms`, `success_rate` columns |
+| **audit-log** | New edge function for compliance logging |
+| **tenant-settings** | New edge function for settings CRUD |
+| **connectivity-test** | New edge function with detailed diagnostics |
+| **connection-metrics** | New edge function for timeout learning |
+| **vm-actions** | Add tenant context and audit logging |
+| **proxmox-servers** | Add exponential backoff retry logic |
+| **TenantSettings** | New page for branding/notifications/defaults |
+| **TenantAuditLog** | New page for viewing/exporting audit logs |
+| **TenantDashboard** | Add VM quick actions section |
+| **ConnectivityTestDialog** | New component for detailed connection diagnostics |
+| **Types** | Add TenantSettings, AuditLog, ConnectivityTestResult interfaces |
+| **Routes** | Add /tenants/:tenantId/settings and /tenants/:tenantId/audit-log |
+| **Permissions** | Add canManageVMs, canViewAuditLogs, canManageSettings flags |
