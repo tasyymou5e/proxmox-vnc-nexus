@@ -1,110 +1,287 @@
 
-# Fix Persistent HTTP 412 Error - Force Complete Rebuild
+# Switch from Public Schema to API Schema
 
-## Current Status
-The site is completely down with **HTTP ERROR 412 (Precondition Failed)** on both preview and published URLs. Multiple code changes have been attempted but the server continues to serve cached responses with mismatched ETags.
+## Overview
+This plan migrates the application from using the `public` schema to the `api` schema for all database operations. Since the Supabase project is configured to only expose the `api` schema via the REST API, all database access must go through views and functions in the `api` schema.
 
-## Investigation Summary
+## Current State Analysis
 
-| File | Status |
-|------|--------|
-| index.html | Valid - correct structure |
-| src/main.tsx | Valid - has BUILD_VERSION console.log |
-| src/App.tsx | Valid - all routes configured correctly |
-| vite.config.ts | Valid - proper build configuration |
-| src/components/ErrorBoundary.tsx | Valid - class component |
-| src/components/theme/ThemeProvider.tsx | Valid - uses next-themes |
-| src/components/auth/AuthProvider.tsx | Valid - session handling correct |
-| package.json | Valid - all dependencies correct |
+### Tables in Public Schema (11 tables)
+| Table | Purpose |
+|-------|---------|
+| `profiles` | User profile information |
+| `user_roles` | System-level user roles (admin/user) |
+| `tenants` | Multi-tenant organizations |
+| `user_tenant_assignments` | User-to-tenant role mappings |
+| `tenant_settings` | Per-tenant configuration |
+| `proxmox_servers` | Proxmox server connections |
+| `proxmox_api_configs` | Proxmox API configurations |
+| `connection_metrics` | Server connection history |
+| `connection_sessions` | VNC console sessions |
+| `audit_logs` | Activity audit trail |
+| `user_vm_assignments` | User-to-VM permissions |
 
-**Browser Behavior:**
-- Main document request fails with 412 (net::ERR_HTTP_RESPONSE_CODE_FAILURE)
-- No JavaScript/CSS loads because the HTML document itself fails
-- Reload button continues to return 412
+### Components Affected
 
-## Root Cause Analysis
-HTTP 412 occurs when:
-1. Browser sends `If-Match` or `If-None-Match` header with cached ETag
-2. Server's current ETag doesn't match
-3. Server responds with 412 instead of the content
+**Frontend Files (10 files):**
+- `src/pages/Admin.tsx` - Queries profiles, user_roles, user_vm_assignments
+- `src/pages/Profile.tsx` - Queries/updates profiles
+- `src/pages/ServerMonitoring.tsx` - Queries proxmox_servers
+- `src/pages/NotificationsCenter.tsx` - Queries audit_logs
+- `src/pages/VMMonitoring.tsx` - Queries proxmox_servers
+- `src/components/auth/AuthProvider.tsx` - Queries user_roles
+- `src/components/servers/ServerComparisonView.tsx` - Queries proxmox_servers
+- `src/hooks/useConnectionHealthAlerts.ts` - Queries tenant_settings, proxmox_servers, audit_logs
+- `src/hooks/useTenantPermissions.ts` - Queries user_tenant_assignments
+- `src/hooks/useConnectivityTest.ts` - Updates proxmox_servers
 
-The Lovable preview server has:
-- Stale cached assets with old ETags
-- Multiple cache layers that haven't invalidated
-- Previous rebuilds only changed JS bundles, not the HTML entry point
+**Realtime Subscriptions (3 files):**
+- `src/hooks/useServerRealtimeUpdates.ts` - Subscribes to proxmox_servers
+- `src/hooks/useRealtimeNotifications.ts` - Subscribes to audit_logs
+- `src/hooks/useConnectionMetricsRealtime.ts` - Subscribes to connection_metrics
 
-## Solution Strategy
-Modify the **index.html** file directly to force a completely new document fingerprint. This bypasses all JavaScript bundle caching because the HTML document itself will be different.
+**Edge Functions (12 functions):**
+- `list-vms` - Queries user_roles, proxmox_servers, user_vm_assignments
+- `tenants` - Queries user_roles, tenants, user_tenant_assignments, profiles
+- `tenant-stats` - Queries proxmox_servers
+- `tenant-settings` - Queries tenant_settings, audit_logs
+- `audit-log` - Queries audit_logs
+- `proxmox-servers` - CRUD on proxmox_servers
+- `vm-console` - Queries user_roles, user_vm_assignments, connection_sessions
+- `vm-actions` - Queries user_roles, user_vm_assignments, audit_logs
+- `delete-user` - Cleanup across multiple tables
+- `connectivity-test` - Queries proxmox_servers, connection_metrics
+- `connection-metrics` - Queries connection_metrics, proxmox_servers
+- `_shared/proxmox-utils.ts` - Queries proxmox_servers
 
-## Implementation
+---
 
-### File: index.html
-Add a cache-busting meta tag and updated timestamp:
+## Implementation Strategy
 
-```html
-<!DOCTYPE html>
-<html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="build-version" content="2026-01-26T23:35:00Z" />
-    <title>Proxmox VNC Nexus</title>
-    <meta name="description" content="Virtual Machine Connection Broker" />
-    <meta name="author" content="Lovable" />
+### Phase 1: Database Migration (SQL)
+Create views in the `api` schema that expose data from `public` schema tables with proper security.
 
-    <meta property="og:title" content="Proxmox VNC Nexus" />
-    <meta property="og:description" content="Virtual Machine Connection Broker" />
-    <meta property="og:type" content="website" />
-    <meta property="og:image" content="https://lovable.dev/opengraph-image-p98pqg.png" />
+```sql
+-- Create api schema if not exists
+CREATE SCHEMA IF NOT EXISTS api;
 
-    <meta name="twitter:card" content="summary_large_image" />
-    <meta name="twitter:site" content="@lovable_dev" />
-    <meta name="twitter:image" content="https://lovable.dev/opengraph-image-p98pqg.png" />
-  </head>
+-- Grant usage on api schema
+GRANT USAGE ON SCHEMA api TO anon, authenticated, service_role;
 
-  <body>
-    <div id="root"></div>
-    <script type="module" src="/src/main.tsx"></script>
-  </body>
-</html>
+-- Create views for each table with security_invoker
+-- This ensures RLS policies from public schema are respected
+
+CREATE OR REPLACE VIEW api.profiles
+WITH (security_invoker=on) AS
+SELECT * FROM public.profiles;
+
+CREATE OR REPLACE VIEW api.user_roles
+WITH (security_invoker=on) AS
+SELECT * FROM public.user_roles;
+
+CREATE OR REPLACE VIEW api.tenants
+WITH (security_invoker=on) AS
+SELECT * FROM public.tenants;
+
+CREATE OR REPLACE VIEW api.user_tenant_assignments
+WITH (security_invoker=on) AS
+SELECT * FROM public.user_tenant_assignments;
+
+CREATE OR REPLACE VIEW api.tenant_settings
+WITH (security_invoker=on) AS
+SELECT * FROM public.tenant_settings;
+
+CREATE OR REPLACE VIEW api.proxmox_servers
+WITH (security_invoker=on) AS
+SELECT * FROM public.proxmox_servers;
+
+CREATE OR REPLACE VIEW api.proxmox_api_configs
+WITH (security_invoker=on) AS
+SELECT * FROM public.proxmox_api_configs;
+
+CREATE OR REPLACE VIEW api.connection_metrics
+WITH (security_invoker=on) AS
+SELECT * FROM public.connection_metrics;
+
+CREATE OR REPLACE VIEW api.connection_sessions
+WITH (security_invoker=on) AS
+SELECT * FROM public.connection_sessions;
+
+CREATE OR REPLACE VIEW api.audit_logs
+WITH (security_invoker=on) AS
+SELECT * FROM public.audit_logs;
+
+CREATE OR REPLACE VIEW api.user_vm_assignments
+WITH (security_invoker=on) AS
+SELECT * FROM public.user_vm_assignments;
+
+-- Grant SELECT on all views
+GRANT SELECT ON ALL TABLES IN SCHEMA api TO anon, authenticated;
+
+-- Grant INSERT, UPDATE, DELETE on views (requires rules or instead-of triggers)
+-- For each view, create INSTEAD OF triggers to handle mutations
+
+-- Example for profiles:
+CREATE OR REPLACE FUNCTION api.profiles_insert()
+RETURNS TRIGGER AS $$
+BEGIN
+  INSERT INTO public.profiles VALUES (NEW.*);
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+CREATE OR REPLACE FUNCTION api.profiles_update()
+RETURNS TRIGGER AS $$
+BEGIN
+  UPDATE public.profiles SET
+    full_name = NEW.full_name,
+    username = NEW.username,
+    company_name = NEW.company_name,
+    avatar_url = NEW.avatar_url,
+    email = NEW.email,
+    updated_at = NEW.updated_at
+  WHERE id = OLD.id;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+CREATE OR REPLACE FUNCTION api.profiles_delete()
+RETURNS TRIGGER AS $$
+BEGIN
+  DELETE FROM public.profiles WHERE id = OLD.id;
+  RETURN OLD;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+CREATE TRIGGER profiles_insert_trigger
+  INSTEAD OF INSERT ON api.profiles
+  FOR EACH ROW EXECUTE FUNCTION api.profiles_insert();
+
+CREATE TRIGGER profiles_update_trigger
+  INSTEAD OF UPDATE ON api.profiles
+  FOR EACH ROW EXECUTE FUNCTION api.profiles_update();
+
+CREATE TRIGGER profiles_delete_trigger
+  INSTEAD OF DELETE ON api.profiles
+  FOR EACH ROW EXECUTE FUNCTION api.profiles_delete();
+
+-- Similar triggers needed for all other views that require mutations
 ```
 
-**Changes Made:**
-1. Added `build-version` meta tag with new timestamp - forces new HTML fingerprint
-2. Updated title to "Proxmox VNC Nexus" - more meaningful
-3. Updated description to "Virtual Machine Connection Broker"
-4. Updated og:title and og:description to match
+### Phase 2: Update Supabase Client Configuration
+Modify the Supabase client to use the `api` schema by default.
 
-## Why This Should Work
-- The HTML document is the entry point - changing it forces a completely new response
-- The server cannot use cached HTML because the content hash is different
-- This bypasses all JavaScript/CSS caching issues
-- The browser will receive fresh content without ETag matching
+**File: `src/integrations/supabase/client.ts`**
+```typescript
+export const supabase = createClient<Database>(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, {
+  auth: {
+    storage: localStorage,
+    persistSession: true,
+    autoRefreshToken: true,
+  },
+  db: {
+    schema: 'api'  // Add this to use api schema
+  }
+});
+```
 
-## Expected Outcome
-After deployment (30-60 seconds):
-1. HTTP 412 errors should resolve
-2. Browser receives fresh index.html
-3. JavaScript and CSS load normally
-4. Console shows "Proxmox VNC Nexus v2026-01-26T23:20:00Z"
-5. Login page renders correctly
+### Phase 3: Update Edge Functions
+All edge functions need to specify the `api` schema when creating the Supabase client.
 
-## Verification Plan
-Once the site loads, I will verify:
-1. Login page renders with email/password form
-2. User can authenticate
-3. Dashboard loads after login
-4. Sidebar navigation works (Dashboard, Tenants, Servers, Settings, Documentation)
-5. Profile page loads (though PGRST106 error may still occur until schema is fixed)
+**Example change for each edge function:**
+```typescript
+const supabase = createClient(
+  Deno.env.get("SUPABASE_URL")!,
+  Deno.env.get("SUPABASE_ANON_KEY")!,
+  { 
+    global: { headers: { Authorization: authHeader } },
+    db: { schema: 'api' }  // Add this
+  }
+);
+```
+
+### Phase 4: Update Realtime Subscriptions
+Change schema references in realtime subscriptions from `public` to `api`.
+
+**Files to update:**
+- `src/hooks/useServerRealtimeUpdates.ts`: Line 70 - change `schema: "public"` to `schema: "api"`
+- `src/hooks/useRealtimeNotifications.ts`: Line 82 - change `schema: "public"` to `schema: "api"`  
+- `src/hooks/useConnectionMetricsRealtime.ts`: Line 22 - change `schema: "public"` to `schema: "api"`
+
+---
 
 ## Files to Modify
 
+### Database Migration
+| Change | Description |
+|--------|-------------|
+| SQL Migration | Create 11 views in `api` schema with INSTEAD OF triggers for mutations |
+
+### Frontend Code (1 file)
 | File | Change |
 |------|--------|
-| index.html | Add build-version meta, update title/description |
+| `src/integrations/supabase/client.ts` | Add `db: { schema: 'api' }` to client config |
 
-## Fallback Plan
-If the 412 still persists after this change:
-1. The issue may be at the Lovable infrastructure level requiring support intervention
-2. Check if the published URL has different behavior
-3. Consider creating a minimal test project to isolate the issue
+### Realtime Hooks (3 files)
+| File | Change |
+|------|--------|
+| `src/hooks/useServerRealtimeUpdates.ts` | Change schema from `public` to `api` |
+| `src/hooks/useRealtimeNotifications.ts` | Change schema from `public` to `api` |
+| `src/hooks/useConnectionMetricsRealtime.ts` | Change schema from `public` to `api` |
+
+### Edge Functions (13 files)
+| File | Change |
+|------|--------|
+| `supabase/functions/list-vms/index.ts` | Add schema config to Supabase client |
+| `supabase/functions/tenants/index.ts` | Add schema config to Supabase client |
+| `supabase/functions/tenant-stats/index.ts` | Add schema config to Supabase client |
+| `supabase/functions/tenant-settings/index.ts` | Add schema config to Supabase client |
+| `supabase/functions/audit-log/index.ts` | Add schema config to Supabase client |
+| `supabase/functions/proxmox-servers/index.ts` | Add schema config to Supabase client |
+| `supabase/functions/vm-console/index.ts` | Add schema config to Supabase client |
+| `supabase/functions/vm-actions/index.ts` | Add schema config to Supabase client |
+| `supabase/functions/delete-user/index.ts` | Add schema config to Supabase client |
+| `supabase/functions/connectivity-test/index.ts` | Add schema config to Supabase client |
+| `supabase/functions/connection-metrics/index.ts` | Add schema config to Supabase client |
+| `supabase/functions/vm-rrd-data/index.ts` | Add schema config to Supabase client |
+| `supabase/functions/_shared/proxmox-utils.ts` | Add schema config to Supabase client |
+
+---
+
+## Technical Considerations
+
+### Views with security_invoker
+Using `security_invoker=on` ensures that RLS policies from the underlying `public` schema tables are respected. The view executes with the permissions of the calling user, not the view owner.
+
+### INSTEAD OF Triggers
+Views don't support INSERT/UPDATE/DELETE directly. INSTEAD OF triggers intercept these operations and redirect them to the underlying tables. Each table requiring mutations needs:
+- Insert trigger function
+- Update trigger function  
+- Delete trigger function
+
+### Realtime Subscriptions
+Supabase Realtime can listen to changes on views in the `api` schema, but the underlying table must have replication enabled. Since the base tables are in `public`, realtime should continue to work.
+
+### RPC Functions
+The existing RPC functions (`has_role`, `has_tenant_role`, `user_has_tenant_access`) are defined in `public` schema and should continue to work when called from the `api` schema context.
+
+---
+
+## Implementation Order
+
+1. **Database Migration First** - Create all views and triggers in `api` schema
+2. **Test Views** - Verify SELECT/INSERT/UPDATE/DELETE work through views
+3. **Update Frontend Client** - Change schema in Supabase client config
+4. **Update Realtime Hooks** - Change schema references
+5. **Update Edge Functions** - Add schema config to all functions
+6. **Deploy and Test** - Verify all functionality works
+
+---
+
+## Rollback Plan
+If issues arise, the changes can be rolled back by:
+1. Removing `db: { schema: 'api' }` from client configurations
+2. Reverting realtime schema references to `public`
+3. Re-exposing `public` schema in Supabase API settings
+
+The views in `api` schema can remain - they don't affect the `public` schema and can be used later.
