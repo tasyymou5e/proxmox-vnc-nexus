@@ -1,59 +1,85 @@
 
 
-# Diagnosis: HTTP 412 Precondition Failed
+# Make Documentation Internal (Protected)
 
-## Summary
+## Overview
+Move the documentation from being publicly accessible to being a protected route that requires authentication. The docs link will be added to the dashboard navigation sidebar and removed from the public landing page.
 
-The login page is not rendering due to an **HTTP 412 Precondition Failed** error being returned by the Lovable preview server for all application resources (App.tsx, index.css, React modules, etc.). This is **not a code issue** - it's a temporary infrastructure/deployment problem.
+## Current State
+- Documentation is publicly accessible at `/docs` without authentication
+- A link to docs exists on the Index page (landing/loading page)
+- The route in `App.tsx` is not wrapped with `ProtectedRoute`
 
-## Evidence
+## Changes Required
 
-The browser console shows these errors:
+### 1. Protect the Docs Route
+**File:** `src/App.tsx`
+
+Wrap the `/docs` route with `ProtectedRoute` so only authenticated users can access it:
+```tsx
+// Change from:
+<Route path="/docs" element={<Suspense fallback={<PageLoader />}><Docs /></Suspense>} />
+
+// Change to:
+<Route path="/docs" element={
+  <ProtectedRoute>
+    <Suspense fallback={<PageLoader />}><Docs /></Suspense>
+  </ProtectedRoute>
+} />
 ```
-Failed to load resource: 412 - /src/App.tsx
-Failed to load resource: 412 - /src/index.css  
-Failed to load resource: 412 - /node_modules/vite/dist/client/env.mjs
-Failed to load resource: 412 - /node_modules/.vite/deps/react-dom_client.js
-Failed to load resource: 412 - /node_modules/.vite/deps/react_jsx-dev-runtime.js
+
+### 2. Remove Public Docs Link
+**File:** `src/pages/Index.tsx`
+
+Remove the documentation link from the Index page since it will no longer be publicly accessible:
+- Remove the `BookOpen` icon import
+- Remove the `Button` component linking to `/docs`
+
+### 3. Add Docs to Dashboard Navigation
+**File:** `src/components/layout/DashboardLayout.tsx`
+
+Add a "Documentation" item to the sidebar navigation:
+- Import `BookOpen` icon from lucide-react
+- Add new nav item: `{ label: "Documentation", href: "/docs", icon: BookOpen }`
+- Position it after Settings for easy access
+
+### 4. Add Docs to Tenant Layout Navigation
+**File:** `src/components/layout/TenantLayout.tsx`
+
+Add a "Documentation" item to the tenant sidebar navigation:
+- Import `BookOpen` icon (add to existing imports)
+- Add new nav item: `{ label: "Documentation", href: "/docs", icon: BookOpen }`
+- Position it at the bottom of the navigation list
+
+## User Flow After Changes
+
+```text
+User visits site
+        |
+        v
+  Authenticated? ----No----> Login Page
+        |
+       Yes
+        |
+        v
+    Dashboard
+        |
+        v
+  Sidebar contains "Documentation" link
+        |
+        v
+  Click Documentation
+        |
+        v
+  View protected docs at /docs
 ```
 
-## Code Verification
+## Files to Modify
 
-I verified all relevant files and they are correct:
-
-| File | Status |
+| File | Change |
 |------|--------|
-| src/pages/Login.tsx | Correctly imports and renders LoginForm/SignupForm |
-| src/components/auth/LoginForm.tsx | Properly structured with all dependencies |
-| src/components/auth/AuthProvider.tsx | Correctly provides auth context |
-| src/App.tsx | Routes configured correctly with lazy loading |
-| src/main.tsx | Properly mounts the App component |
-| index.html | Correctly references /src/main.tsx |
-
-## Solution Options
-
-Since this is an infrastructure issue, the fix involves triggering a fresh build:
-
-### Option 1: Trigger a Rebuild (Recommended)
-Make a minimal code change to force the preview server to rebuild. I can add a simple comment or whitespace change to trigger a fresh deployment.
-
-### Option 2: Wait for Auto-Recovery
-The preview server may auto-recover in a few minutes. You can try refreshing the preview in 2-3 minutes.
-
-### Option 3: Clear Browser Cache
-If the issue persists on your end, try:
-1. Hard refresh (Ctrl+Shift+R / Cmd+Shift+R)
-2. Open in incognito/private browsing mode
-3. Clear browser cache for the preview domain
-
-## Technical Details
-
-HTTP 412 (Precondition Failed) typically occurs when:
-- The server's cached resources don't match the client's conditional request headers
-- A build is in progress and assets are transitioning
-- There's a version mismatch between the preview server and stored assets
-
-## Recommended Action
-
-Switch to **Default Mode** and I'll make a minimal change (like adding a comment to main.tsx) to trigger a fresh build, which should resolve the 412 errors and render the login page correctly.
+| `src/App.tsx` | Wrap `/docs` route with `ProtectedRoute` |
+| `src/pages/Index.tsx` | Remove public docs link |
+| `src/components/layout/DashboardLayout.tsx` | Add Documentation nav item |
+| `src/components/layout/TenantLayout.tsx` | Add Documentation nav item |
 
