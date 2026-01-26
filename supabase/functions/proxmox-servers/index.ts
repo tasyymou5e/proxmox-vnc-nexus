@@ -40,6 +40,7 @@ interface ServerInput {
   tailscale_hostname?: string;
   tailscale_port?: number;
   connection_timeout?: number;
+  tenantId?: string; // Required for tenant-scoped operations
 }
 
 interface HealthCheckResult {
@@ -54,6 +55,29 @@ interface ImportError {
   index: number;
   name: string;
   error: string;
+}
+
+// Helper to check if user has tenant access with specific roles
+async function checkTenantAccess(
+  supabase: ReturnType<typeof createClient>,
+  userId: string,
+  tenantId: string,
+  requiredRoles: string[]
+): Promise<boolean> {
+  // Check system admin
+  const { data: isAdmin } = await supabase.rpc("has_role", {
+    _user_id: userId,
+    _role: "admin",
+  });
+  if (isAdmin) return true;
+
+  // Check tenant role
+  const { data: hasTenantRole } = await supabase.rpc("has_tenant_role", {
+    _user_id: userId,
+    _tenant_id: tenantId,
+    _roles: requiredRoles,
+  });
+  return !!hasTenantRole;
 }
 
 Deno.serve(async (req) => {
@@ -101,14 +125,23 @@ Deno.serve(async (req) => {
     const pathParts = url.pathname.split("/").filter(Boolean);
     const action = pathParts[pathParts.length - 1];
 
-    // Handle different HTTP methods and actions
+    // Handle GET requests (list servers)
     if (req.method === "GET") {
-      // List all servers for the user
-      const { data: servers, error } = await supabase
+      // Parse tenantId from query params
+      const tenantId = url.searchParams.get("tenantId");
+      
+      let query = supabase
         .from("proxmox_servers")
-        .select("id, name, host, port, verify_ssl, is_active, last_connected_at, created_at, updated_at, connection_status, last_health_check_at, health_check_error, use_tailscale, tailscale_hostname, tailscale_port, connection_timeout")
-        .eq("user_id", userId)
+        .select("id, name, host, port, verify_ssl, is_active, last_connected_at, created_at, updated_at, connection_status, last_health_check_at, health_check_error, use_tailscale, tailscale_hostname, tailscale_port, connection_timeout, tenant_id")
         .order("created_at", { ascending: false });
+
+      // If tenantId provided, filter by tenant (RLS will handle authorization)
+      if (tenantId) {
+        query = query.eq("tenant_id", tenantId);
+      }
+      // Otherwise, RLS will return servers user has access to
+
+      const { data: servers, error } = await query;
 
       if (error) {
         return new Response(
@@ -125,14 +158,20 @@ Deno.serve(async (req) => {
 
     if (req.method === "POST") {
       const body = await req.json();
+      const tenantId = body.tenantId;
 
       // Health check all servers
       if (action === "health-check-all" || body.action === "health-check-all") {
-        const { data: servers } = await supabase
+        let query = supabase
           .from("proxmox_servers")
-          .select("id, name, host, port, api_token_encrypted, is_active, use_tailscale, tailscale_hostname, tailscale_port, connection_timeout")
-          .eq("user_id", userId)
+          .select("id, name, host, port, api_token_encrypted, is_active, use_tailscale, tailscale_hostname, tailscale_port, connection_timeout, tenant_id")
           .eq("is_active", true);
+
+        if (tenantId) {
+          query = query.eq("tenant_id", tenantId);
+        }
+
+        const { data: servers } = await query;
 
         if (!servers || servers.length === 0) {
           return new Response(
@@ -180,8 +219,7 @@ Deno.serve(async (req) => {
                   last_connected_at: new Date().toISOString(),
                   health_check_error: null,
                 })
-                .eq("id", server.id)
-                .eq("user_id", userId);
+                .eq("id", server.id);
             } else {
               const errorData = await testResponse.json().catch(() => ({}));
               result.error = errorData.errors || `HTTP ${testResponse.status}`;
@@ -193,8 +231,7 @@ Deno.serve(async (req) => {
                   last_health_check_at: new Date().toISOString(),
                   health_check_error: result.error,
                 })
-                .eq("id", server.id)
-                .eq("user_id", userId);
+                .eq("id", server.id);
             }
           } catch (err) {
             result.error = err.message || "Connection failed";
@@ -206,8 +243,7 @@ Deno.serve(async (req) => {
                 last_health_check_at: new Date().toISOString(),
                 health_check_error: result.error,
               })
-              .eq("id", server.id)
-              .eq("user_id", userId);
+              .eq("id", server.id);
           }
 
           results.push(result);
@@ -223,6 +259,22 @@ Deno.serve(async (req) => {
       if (action === "bulk-import" || body.action === "bulk-import") {
         const { servers: serversToImport }: { servers: ServerInput[] } = body;
 
+        if (!tenantId) {
+          return new Response(
+            JSON.stringify({ error: "tenantId is required for bulk import" }),
+            { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+          );
+        }
+
+        // Check user has manager+ access to tenant
+        const hasAccess = await checkTenantAccess(supabase, userId, tenantId, ["admin", "manager"]);
+        if (!hasAccess) {
+          return new Response(
+            JSON.stringify({ error: "Access denied" }),
+            { status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+          );
+        }
+
         if (!serversToImport || !Array.isArray(serversToImport) || serversToImport.length === 0) {
           return new Response(
             JSON.stringify({ error: "No servers provided for import" }),
@@ -230,11 +282,11 @@ Deno.serve(async (req) => {
           );
         }
 
-        // Check server limit
+        // Check server limit per tenant
         const { count: currentCount } = await supabase
           .from("proxmox_servers")
           .select("*", { count: "exact", head: true })
-          .eq("user_id", userId);
+          .eq("tenant_id", tenantId);
 
         const remainingSlots = 50 - (currentCount || 0);
         if (serversToImport.length > remainingSlots) {
@@ -275,6 +327,7 @@ Deno.serve(async (req) => {
 
           const insertData: Record<string, unknown> = {
             user_id: userId,
+            tenant_id: tenantId,
             name: server.name.trim(),
             host: server.host.trim(),
             port: server.port || 8006,
@@ -331,7 +384,6 @@ Deno.serve(async (req) => {
             .from("proxmox_servers")
             .select("api_token_encrypted, host, port, use_tailscale, tailscale_hostname, tailscale_port, connection_timeout")
             .eq("id", server_id)
-            .eq("user_id", userId)
             .single();
           
           if (!server) {
@@ -378,8 +430,7 @@ Deno.serve(async (req) => {
                   last_health_check_at: new Date().toISOString(),
                   health_check_error: testData.errors || "Connection failed"
                 })
-                .eq("id", server_id)
-                .eq("user_id", userId);
+                .eq("id", server_id);
             }
 
             return new Response(
@@ -402,8 +453,7 @@ Deno.serve(async (req) => {
                 last_health_check_at: new Date().toISOString(),
                 health_check_error: null
               })
-              .eq("id", server_id)
-              .eq("user_id", userId);
+              .eq("id", server_id);
           }
 
           return new Response(
@@ -424,8 +474,7 @@ Deno.serve(async (req) => {
                 last_health_check_at: new Date().toISOString(),
                 health_check_error: error.message || "Connection failed"
               })
-              .eq("id", server_id)
-              .eq("user_id", userId);
+              .eq("id", server_id);
           }
 
           return new Response(
@@ -438,7 +487,7 @@ Deno.serve(async (req) => {
         }
       }
 
-      // Create new server
+      // Create new server (requires tenantId)
       const { 
         name, 
         host, 
@@ -450,6 +499,22 @@ Deno.serve(async (req) => {
         tailscale_port = 8006,
         connection_timeout = 10000
       }: ServerInput = body;
+
+      if (!tenantId) {
+        return new Response(
+          JSON.stringify({ error: "tenantId is required" }),
+          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+
+      // Check user has manager+ access to tenant
+      const hasAccess = await checkTenantAccess(supabase, userId, tenantId, ["admin", "manager"]);
+      if (!hasAccess) {
+        return new Response(
+          JSON.stringify({ error: "Access denied" }),
+          { status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
 
       if (!name || !host || !port || !api_token) {
         return new Response(
@@ -467,15 +532,15 @@ Deno.serve(async (req) => {
         );
       }
 
-      // Check server limit
+      // Check server limit per tenant
       const { count } = await supabase
         .from("proxmox_servers")
         .select("*", { count: "exact", head: true })
-        .eq("user_id", userId);
+        .eq("tenant_id", tenantId);
 
       if (count && count >= 50) {
         return new Response(
-          JSON.stringify({ error: "Maximum number of servers (50) reached" }),
+          JSON.stringify({ error: "Maximum number of servers (50) reached for this tenant" }),
           { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
         );
       }
@@ -487,6 +552,7 @@ Deno.serve(async (req) => {
         .from("proxmox_servers")
         .insert({
           user_id: userId,
+          tenant_id: tenantId,
           name,
           host,
           port,
@@ -498,7 +564,7 @@ Deno.serve(async (req) => {
           tailscale_port,
           connection_timeout: Math.min(Math.max(connection_timeout, 5000), 120000), // Clamp between 5s and 120s
         })
-        .select("id, name, host, port, verify_ssl, is_active, created_at, updated_at, connection_status, last_health_check_at, health_check_error, use_tailscale, tailscale_hostname, tailscale_port, connection_timeout")
+        .select("id, name, host, port, verify_ssl, is_active, created_at, updated_at, connection_status, last_health_check_at, health_check_error, use_tailscale, tailscale_hostname, tailscale_port, connection_timeout, tenant_id")
         .single();
 
       if (error) {
@@ -522,7 +588,7 @@ Deno.serve(async (req) => {
 
     if (req.method === "PUT") {
       const body = await req.json();
-      const { id, name, host, port, api_token, verify_ssl, is_active, use_tailscale, tailscale_hostname, tailscale_port } = body;
+      const { id, name, host, port, api_token, verify_ssl, is_active, use_tailscale, tailscale_hostname, tailscale_port, connection_timeout } = body;
 
       if (!id) {
         return new Response(
@@ -540,6 +606,7 @@ Deno.serve(async (req) => {
       if (tailscale_hostname !== undefined) updateData.tailscale_hostname = tailscale_hostname?.trim() || null;
       if (tailscale_port !== undefined) updateData.tailscale_port = tailscale_port;
       if (is_active !== undefined) updateData.is_active = is_active;
+      if (connection_timeout !== undefined) updateData.connection_timeout = Math.min(Math.max(connection_timeout, 5000), 120000);
       
       // If new API token provided, encrypt it
       if (api_token) {
@@ -553,12 +620,12 @@ Deno.serve(async (req) => {
         updateData.api_token_encrypted = encryptToken(api_token, encryptionKey);
       }
 
+      // RLS will handle authorization
       const { data: server, error } = await supabase
         .from("proxmox_servers")
         .update(updateData)
         .eq("id", id)
-        .eq("user_id", userId)
-        .select("id, name, host, port, verify_ssl, is_active, last_connected_at, created_at, updated_at, connection_status, last_health_check_at, health_check_error, use_tailscale, tailscale_hostname, tailscale_port")
+        .select("id, name, host, port, verify_ssl, is_active, last_connected_at, created_at, updated_at, connection_status, last_health_check_at, health_check_error, use_tailscale, tailscale_hostname, tailscale_port, connection_timeout, tenant_id")
         .single();
 
       if (error) {
@@ -570,7 +637,7 @@ Deno.serve(async (req) => {
 
       if (!server) {
         return new Response(
-          JSON.stringify({ error: "Server not found" }),
+          JSON.stringify({ error: "Server not found or access denied" }),
           { status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" } }
         );
       }
@@ -592,11 +659,11 @@ Deno.serve(async (req) => {
         );
       }
 
+      // RLS will handle authorization (only tenant admins can delete)
       const { error } = await supabase
         .from("proxmox_servers")
         .delete()
-        .eq("id", id)
-        .eq("user_id", userId);
+        .eq("id", id);
 
       if (error) {
         return new Response(

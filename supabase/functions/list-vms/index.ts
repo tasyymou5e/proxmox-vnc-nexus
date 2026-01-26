@@ -27,6 +27,7 @@ interface VM {
 
 interface ListVMsRequest {
   serverId?: string;
+  tenantId?: string;
 }
 
 interface ServerInfo {
@@ -84,13 +85,15 @@ Deno.serve(async (req) => {
 
     const isAdmin = roleData?.role === "admin";
 
-    // Parse request body for optional serverId
+    // Parse request body for optional filters
     let serverId: string | undefined;
+    let tenantId: string | undefined;
     try {
       const body: ListVMsRequest = await req.json();
       serverId = body.serverId;
+      tenantId = body.tenantId;
     } catch {
-      // No body or invalid JSON, continue without serverId
+      // No body or invalid JSON, continue without filters
     }
 
     // Get servers to query
@@ -109,12 +112,18 @@ Deno.serve(async (req) => {
         serversToQuery = [server];
       }
     } else if (encryptionKey) {
-      // Query all active servers for the user (or all servers for admin)
-      const { data: servers } = await supabase
+      // Query servers - filter by tenant if specified
+      let query = supabase
         .from("proxmox_servers")
         .select("id, name, host, port, api_token_encrypted, use_tailscale, tailscale_hostname, tailscale_port, connection_timeout")
         .eq("is_active", true)
         .order("name");
+
+      if (tenantId) {
+        query = query.eq("tenant_id", tenantId);
+      }
+
+      const { data: servers } = await query;
 
       if (servers && servers.length > 0) {
         serversToQuery = servers;

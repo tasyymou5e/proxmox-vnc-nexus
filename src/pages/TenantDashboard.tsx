@@ -1,46 +1,70 @@
-import { useParams, useNavigate } from "react-router-dom";
-import { ArrowLeft, Server, HardDrive, Cpu, MemoryStick, Database, Activity, RefreshCw, Loader2, Settings } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Progress } from "@/components/ui/progress";
-import { Badge } from "@/components/ui/badge";
-import { Skeleton } from "@/components/ui/skeleton";
+import { useParams, Link, useNavigate } from "react-router-dom";
 import { TenantLayout } from "@/components/layout/TenantLayout";
-import { useTenant, useTenantStats } from "@/hooks/useTenants";
-import { useClusterResources, useNodes } from "@/hooks/useProxmoxApi";
+import { useTenant } from "@/hooks/useTenants";
+import { useLiveTenantStats } from "@/hooks/useLiveTenantStats";
+import { useTenantPermissions } from "@/hooks/useTenantPermissions";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Badge } from "@/components/ui/badge";
+import { Progress } from "@/components/ui/progress";
+import { useNodes, useClusterResources } from "@/hooks/useProxmoxApi";
+import { 
+  Server, 
+  Monitor, 
+  HardDrive, 
+  Cpu, 
+  MemoryStick, 
+  Database,
+  Activity,
+  Users,
+  RefreshCcw,
+  Plus,
+  PlayCircle,
+  StopCircle,
+  ArrowLeft,
+  Settings
+} from "lucide-react";
 
 function StatCard({ 
   title, 
   value, 
   subValue, 
   icon: Icon, 
-  isLoading 
+  loading,
+  status
 }: { 
   title: string; 
-  value: string | number; 
-  subValue?: string;
-  icon: React.ElementType;
-  isLoading?: boolean;
+  value: number | string; 
+  subValue?: string; 
+  icon: typeof Server; 
+  loading?: boolean;
+  status?: "success" | "warning" | "error";
 }) {
   return (
     <Card>
-      <CardHeader className="flex flex-row items-center justify-between pb-2">
-        <CardTitle className="text-sm font-medium text-muted-foreground">
-          {title}
-        </CardTitle>
-        <Icon className="h-4 w-4 text-muted-foreground" />
-      </CardHeader>
-      <CardContent>
-        {isLoading ? (
-          <Skeleton className="h-8 w-24" />
-        ) : (
-          <>
-            <div className="text-2xl font-bold">{value}</div>
-            {subValue && (
-              <p className="text-xs text-muted-foreground mt-1">{subValue}</p>
+      <CardContent className="p-6">
+        <div className="flex items-start justify-between">
+          <div className="space-y-1">
+            <p className="text-sm font-medium text-muted-foreground">{title}</p>
+            {loading ? (
+              <Skeleton className="h-8 w-16" />
+            ) : (
+              <p className="text-2xl font-bold">{value}</p>
             )}
-          </>
-        )}
+            {subValue && (
+              <p className="text-xs text-muted-foreground">{subValue}</p>
+            )}
+          </div>
+          <div className={`p-2 rounded-lg ${
+            status === "success" ? "bg-green-100 text-green-600 dark:bg-green-900/30 dark:text-green-400" :
+            status === "warning" ? "bg-orange-100 text-orange-600 dark:bg-orange-900/30 dark:text-orange-400" :
+            status === "error" ? "bg-red-100 text-red-600 dark:bg-red-900/30 dark:text-red-400" :
+            "bg-muted text-muted-foreground"
+          }`}>
+            <Icon className="h-5 w-5" />
+          </div>
+        </div>
       </CardContent>
     </Card>
   );
@@ -52,39 +76,63 @@ function ResourceCard({
   total,
   unit,
   icon: Icon,
-  isLoading,
+  loading,
 }: {
   title: string;
   used: number;
   total: number;
   unit: string;
-  icon: React.ElementType;
-  isLoading?: boolean;
+  icon: typeof Cpu;
+  loading?: boolean;
 }) {
   const percentage = total > 0 ? Math.round((used / total) * 100) : 0;
   
+  const formatValue = (val: number, u: string) => {
+    if (u === "GB") return (val / 1024 / 1024 / 1024).toFixed(1);
+    if (u === "TB") return (val / 1024 / 1024 / 1024 / 1024).toFixed(2);
+    if (u === "cores") return val.toFixed(1);
+    return val.toFixed(1);
+  };
+
+  const getProgressColor = (pct: number) => {
+    if (pct >= 90) return "bg-destructive";
+    if (pct >= 70) return "bg-orange-500";
+    return "bg-primary";
+  };
+
   return (
     <Card>
-      <CardHeader className="flex flex-row items-center justify-between pb-2">
-        <CardTitle className="text-sm font-medium text-muted-foreground">
-          {title}
-        </CardTitle>
-        <Icon className="h-4 w-4 text-muted-foreground" />
-      </CardHeader>
-      <CardContent>
-        {isLoading ? (
-          <div className="space-y-2">
-            <Skeleton className="h-8 w-24" />
-            <Skeleton className="h-2 w-full" />
+      <CardContent className="p-6">
+        <div className="flex items-center gap-3 mb-4">
+          <div className="p-2 rounded-lg bg-muted">
+            <Icon className="h-5 w-5 text-muted-foreground" />
           </div>
+          <div>
+            <p className="font-medium">{title}</p>
+            {loading ? (
+              <Skeleton className="h-4 w-24 mt-1" />
+            ) : (
+              <p className="text-sm text-muted-foreground">
+                {formatValue(used, unit)} / {formatValue(total, unit)} {unit}
+              </p>
+            )}
+          </div>
+        </div>
+        {loading ? (
+          <Skeleton className="h-2 w-full" />
         ) : (
-          <>
-            <div className="text-2xl font-bold">{percentage}%</div>
-            <Progress value={percentage} className="mt-2" />
-            <p className="text-xs text-muted-foreground mt-2">
-              {used.toFixed(1)} / {total.toFixed(1)} {unit}
-            </p>
-          </>
+          <div className="space-y-2">
+            <div className="flex justify-between text-sm">
+              <span className="text-muted-foreground">Usage</span>
+              <span className="font-medium">{percentage}%</span>
+            </div>
+            <div className="h-2 bg-muted rounded-full overflow-hidden">
+              <div
+                className={`h-full rounded-full transition-all ${getProgressColor(percentage)}`}
+                style={{ width: `${Math.min(percentage, 100)}%` }}
+              />
+            </div>
+          </div>
         )}
       </CardContent>
     </Card>
@@ -94,39 +142,13 @@ function ResourceCard({
 export default function TenantDashboard() {
   const { tenantId } = useParams<{ tenantId: string }>();
   const navigate = useNavigate();
-  
   const { data: tenant, isLoading: isTenantLoading } = useTenant(tenantId);
-  const { data: stats, isLoading: isStatsLoading } = useTenantStats(tenantId);
-  const { data: resources, isLoading: isResourcesLoading, refetch: refetchResources } = useClusterResources(tenantId);
+  const { data: liveStats, isLoading: isStatsLoading, refetch, dataUpdatedAt } = useLiveTenantStats(tenantId);
+  const { canManageServers, canManageUsers } = useTenantPermissions(tenantId);
   const { data: nodes, isLoading: isNodesLoading } = useNodes(tenantId);
 
-  // Parse cluster resources
-  const resourceData = resources?.data || [];
   const nodesData = nodes?.data || [];
-  
-  const vmCount = resourceData.filter((r: { type: string }) => r.type === 'qemu').length;
-  const lxcCount = resourceData.filter((r: { type: string }) => r.type === 'lxc').length;
-  const runningVMs = resourceData.filter((r: { type: string; status: string }) => 
-    (r.type === 'qemu' || r.type === 'lxc') && r.status === 'running'
-  ).length;
-  const stoppedVMs = vmCount + lxcCount - runningVMs;
-
-  // Calculate aggregate resources from nodes
-  const totalCpu = nodesData.reduce((acc: number, n: { maxcpu?: number }) => acc + (n.maxcpu || 0), 0);
-  const usedCpu = nodesData.reduce((acc: number, n: { cpu?: number; maxcpu?: number }) => 
-    acc + ((n.cpu || 0) * (n.maxcpu || 0)), 0);
-  
-  const totalMem = nodesData.reduce((acc: number, n: { maxmem?: number }) => acc + (n.maxmem || 0), 0);
-  const usedMem = nodesData.reduce((acc: number, n: { mem?: number }) => acc + (n.mem || 0), 0);
-
-  // Storage from resources
-  const storageResources = resourceData.filter((r: { type: string }) => r.type === 'storage');
-  const totalStorage = storageResources.reduce((acc: number, s: { maxdisk?: number }) => 
-    acc + (s.maxdisk || 0), 0) / (1024 ** 3); // Convert to GB
-  const usedStorage = storageResources.reduce((acc: number, s: { disk?: number }) => 
-    acc + (s.disk || 0), 0) / (1024 ** 3);
-
-  const isLoading = isTenantLoading || isStatsLoading || isResourcesLoading || isNodesLoading;
+  const lastUpdated = dataUpdatedAt ? new Date(dataUpdatedAt).toLocaleTimeString() : null;
 
   return (
     <TenantLayout>
@@ -138,95 +160,138 @@ export default function TenantDashboard() {
               <ArrowLeft className="h-5 w-5" />
             </Button>
             <div>
-              <h1 className="text-2xl font-bold">
-                {isTenantLoading ? <Skeleton className="h-8 w-48" /> : tenant?.name}
-              </h1>
-              <p className="text-muted-foreground">
-                Environment Overview
-              </p>
+              {isTenantLoading ? (
+                <>
+                  <Skeleton className="h-8 w-48 mb-2" />
+                  <Skeleton className="h-4 w-32" />
+                </>
+              ) : (
+                <>
+                  <h1 className="text-2xl font-bold">{tenant?.name}</h1>
+                  <p className="text-muted-foreground">
+                    {tenant?.description || "Environment Overview"}
+                  </p>
+                </>
+              )}
             </div>
           </div>
-          
-          <div className="flex items-center gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => refetchResources()}
-              disabled={isResourcesLoading}
-            >
-              {isResourcesLoading ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <RefreshCw className="h-4 w-4" />
-              )}
-              <span className="ml-2 hidden sm:inline">Refresh</span>
+          <div className="flex items-center gap-3">
+            {/* Live indicator */}
+            <div className="hidden sm:flex items-center gap-2 text-xs text-muted-foreground">
+              <Activity className="h-3 w-3 animate-pulse text-green-500" />
+              <span>Live</span>
+              {lastUpdated && <span>• {lastUpdated}</span>}
+            </div>
+            <Button variant="outline" size="sm" onClick={() => refetch()}>
+              <RefreshCcw className="h-4 w-4 sm:mr-2" />
+              <span className="hidden sm:inline">Refresh</span>
             </Button>
             <Button variant="outline" size="sm" onClick={() => navigate(`/tenants/${tenantId}/servers`)}>
-              <Settings className="h-4 w-4 mr-2" />
-              Servers
+              <Settings className="h-4 w-4 sm:mr-2" />
+              <span className="hidden sm:inline">Servers</span>
             </Button>
           </div>
         </div>
 
-        {/* Stats Grid */}
-        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+        {/* Quick Stats */}
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
           <StatCard
             title="Nodes"
-            value={nodesData.length}
-            subValue={`${nodesData.filter((n: { status?: string }) => n.status === 'online').length} online`}
-            icon={HardDrive}
-            isLoading={isNodesLoading}
+            value={liveStats?.nodes.online ?? 0}
+            subValue={liveStats ? `${liveStats.nodes.offline} offline` : undefined}
+            icon={Server}
+            loading={isStatsLoading}
+            status={liveStats?.nodes.offline === 0 && liveStats?.nodes.online > 0 ? "success" : liveStats?.nodes.online === 0 ? "error" : "warning"}
           />
           <StatCard
             title="Virtual Machines"
-            value={vmCount}
-            subValue={`${runningVMs} running, ${stoppedVMs} stopped`}
-            icon={Server}
-            isLoading={isResourcesLoading}
+            value={liveStats?.totalVMs ?? 0}
+            subValue={liveStats ? `${liveStats.runningVMs} running` : undefined}
+            icon={Monitor}
+            loading={isStatsLoading}
           />
           <StatCard
             title="Containers"
-            value={lxcCount}
-            subValue="LXC containers"
-            icon={Database}
-            isLoading={isResourcesLoading}
+            value={liveStats?.totalContainers ?? 0}
+            subValue={liveStats ? `${liveStats.runningContainers} running` : undefined}
+            icon={HardDrive}
+            loading={isStatsLoading}
           />
           <StatCard
-            title="Servers Connected"
-            value={stats?.servers || 0}
-            subValue={`${stats?.activeServers || 0} online`}
-            icon={Activity}
-            isLoading={isStatsLoading}
+            title="Servers"
+            value={liveStats?.servers.total ?? 0}
+            subValue={liveStats ? `${liveStats.servers.online} online` : undefined}
+            icon={Database}
+            loading={isStatsLoading}
+            status={liveStats?.servers.offline === 0 && liveStats?.servers.online > 0 ? "success" : liveStats?.servers.online === 0 ? "error" : "warning"}
           />
+        </div>
+
+        {/* VM Status Summary */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-base">Virtual Machines Status</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="flex items-center gap-4">
+                <div className="flex items-center gap-2">
+                  <PlayCircle className="h-4 w-4 text-green-500" />
+                  <span className="text-sm font-medium">{liveStats?.runningVMs ?? 0} Running</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <StopCircle className="h-4 w-4 text-muted-foreground" />
+                  <span className="text-sm font-medium">{liveStats?.stoppedVMs ?? 0} Stopped</span>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-base">Containers Status</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="flex items-center gap-4">
+                <div className="flex items-center gap-2">
+                  <PlayCircle className="h-4 w-4 text-green-500" />
+                  <span className="text-sm font-medium">{liveStats?.runningContainers ?? 0} Running</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <StopCircle className="h-4 w-4 text-muted-foreground" />
+                  <span className="text-sm font-medium">{liveStats?.stoppedContainers ?? 0} Stopped</span>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
         </div>
 
         {/* Resource Usage */}
         <div>
           <h2 className="text-lg font-semibold mb-4">Resource Usage</h2>
-          <div className="grid gap-4 md:grid-cols-3">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <ResourceCard
-              title="CPU Usage"
-              used={usedCpu}
-              total={totalCpu}
+              title="CPU"
+              used={liveStats?.cpuUsage.used ?? 0}
+              total={liveStats?.cpuUsage.total ?? 1}
               unit="cores"
               icon={Cpu}
-              isLoading={isNodesLoading}
+              loading={isStatsLoading}
             />
             <ResourceCard
-              title="Memory Usage"
-              used={usedMem / (1024 ** 3)}
-              total={totalMem / (1024 ** 3)}
+              title="Memory"
+              used={liveStats?.memoryUsage.used ?? 0}
+              total={liveStats?.memoryUsage.total ?? 1}
               unit="GB"
               icon={MemoryStick}
-              isLoading={isNodesLoading}
+              loading={isStatsLoading}
             />
             <ResourceCard
-              title="Storage Usage"
-              used={usedStorage}
-              total={totalStorage}
-              unit="GB"
+              title="Storage"
+              used={liveStats?.storageUsage.used ?? 0}
+              total={liveStats?.storageUsage.total ?? 1}
+              unit="TB"
               icon={Database}
-              isLoading={isResourcesLoading}
+              loading={isStatsLoading}
             />
           </div>
         </div>
@@ -245,32 +310,34 @@ export default function TenantDashboard() {
               ))}
             </div>
           ) : nodesData.length === 0 ? (
-            <Card>
+            <Card className="border-dashed">
               <CardContent className="flex flex-col items-center justify-center py-12">
-                <HardDrive className="h-12 w-12 text-muted-foreground mb-4" />
-                <h3 className="font-medium">No Nodes Connected</h3>
-                <p className="text-muted-foreground text-sm mt-1">
-                  Add a Proxmox server to see node information
+                <Server className="h-12 w-12 text-muted-foreground mb-4" />
+                <h3 className="text-lg font-medium mb-2">No servers configured</h3>
+                <p className="text-muted-foreground text-center mb-4">
+                  Add your first Proxmox server to start monitoring your infrastructure.
                 </p>
-                <Button 
-                  className="mt-4"
-                  onClick={() => navigate(`/tenants/${tenantId}/servers`)}
-                >
-                  Add Server
-                </Button>
+                {canManageServers && (
+                  <Button asChild>
+                    <Link to={`/tenants/${tenantId}/servers`}>
+                      <Plus className="h-4 w-4 mr-2" />
+                      Add Server
+                    </Link>
+                  </Button>
+                )}
               </CardContent>
             </Card>
           ) : (
             <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-              {nodesData.map((node: { 
-                node: string; 
-                status?: string; 
-                cpu?: number; 
-                mem?: number; 
+              {nodesData.map((node: {
+                node: string;
+                status?: string;
+                cpu?: number;
+                mem?: number;
                 maxmem?: number;
                 uptime?: number;
               }) => (
-                <Card 
+                <Card
                   key={node.node}
                   className="cursor-pointer hover:border-primary/50 transition-colors"
                   onClick={() => navigate(`/tenants/${tenantId}/nodes/${node.node}`)}
@@ -298,9 +365,9 @@ export default function TenantDashboard() {
                           {node.maxmem ? (((node.mem || 0) / node.maxmem) * 100).toFixed(1) : 0}%
                         </span>
                       </div>
-                      <Progress 
-                        value={node.maxmem ? ((node.mem || 0) / node.maxmem) * 100 : 0} 
-                        className="h-1" 
+                      <Progress
+                        value={node.maxmem ? ((node.mem || 0) / node.maxmem) * 100 : 0}
+                        className="h-1"
                       />
                     </div>
                     {node.uptime && (
@@ -313,6 +380,33 @@ export default function TenantDashboard() {
               ))}
             </div>
           )}
+        </div>
+
+        {/* Quick Actions */}
+        <div>
+          <h2 className="text-lg font-semibold mb-4">Quick Actions</h2>
+          <div className="flex flex-wrap gap-3">
+            <Button variant="outline" asChild>
+              <Link to={`/tenants/${tenantId}/servers`}>
+                <Server className="h-4 w-4 mr-2" />
+                Manage Servers
+              </Link>
+            </Button>
+            {canManageUsers && (
+              <Button variant="outline" asChild>
+                <Link to={`/tenants/${tenantId}/users`}>
+                  <Users className="h-4 w-4 mr-2" />
+                  Manage Team
+                </Link>
+              </Button>
+            )}
+            <Button variant="outline" asChild>
+              <Link to={`/tenants/${tenantId}/cluster/status`}>
+                <Activity className="h-4 w-4 mr-2" />
+                Cluster Status
+              </Link>
+            </Button>
+          </div>
         </div>
       </div>
     </TenantLayout>

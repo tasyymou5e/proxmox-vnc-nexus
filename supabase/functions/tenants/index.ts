@@ -6,7 +6,7 @@ const corsHeaders = {
 };
 
 interface TenantRequest {
-  action: 'list' | 'create' | 'update' | 'delete' | 'get' | 'get-stats' | 'assign-user' | 'remove-user' | 'list-users';
+  action: 'list' | 'create' | 'update' | 'delete' | 'get' | 'get-stats' | 'assign-user' | 'remove-user' | 'list-users' | 'search-users' | 'update-user-role';
   tenantId?: string;
   data?: Record<string, unknown>;
 }
@@ -264,7 +264,14 @@ Deno.serve(async (req) => {
       }
 
       case 'assign-user': {
-        if (!isAdmin) {
+        // Check if user is system admin OR tenant admin
+        const { data: hasTenantAdminRole } = await supabase.rpc("has_tenant_role", {
+          _user_id: userId,
+          _tenant_id: tenantId,
+          _roles: ["admin"],
+        });
+
+        if (!isAdmin && !hasTenantAdminRole) {
           return new Response(
             JSON.stringify({ error: "Admin access required" }),
             { status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" } }
@@ -301,7 +308,14 @@ Deno.serve(async (req) => {
       }
 
       case 'remove-user': {
-        if (!isAdmin) {
+        // Check if user is system admin OR tenant admin
+        const { data: hasTenantAdminRole } = await supabase.rpc("has_tenant_role", {
+          _user_id: userId,
+          _tenant_id: tenantId,
+          _roles: ["admin"],
+        });
+
+        if (!isAdmin && !hasTenantAdminRole) {
           return new Response(
             JSON.stringify({ error: "Admin access required" }),
             { status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" } }
@@ -327,6 +341,46 @@ Deno.serve(async (req) => {
 
         return new Response(
           JSON.stringify({ success: true }),
+          { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+
+      case 'update-user-role': {
+        // Check if user is system admin OR tenant admin
+        const { data: hasTenantAdminRole } = await supabase.rpc("has_tenant_role", {
+          _user_id: userId,
+          _tenant_id: tenantId,
+          _roles: ["admin"],
+        });
+
+        if (!isAdmin && !hasTenantAdminRole) {
+          return new Response(
+            JSON.stringify({ error: "Admin access required" }),
+            { status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+          );
+        }
+
+        const { user_id, role } = data as { user_id: string; role: string };
+        
+        if (!tenantId || !user_id || !role) {
+          return new Response(
+            JSON.stringify({ error: "Tenant ID, user ID, and role are required" }),
+            { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+          );
+        }
+
+        const { data: assignment, error } = await supabase
+          .from("user_tenant_assignments")
+          .update({ role })
+          .eq("tenant_id", tenantId)
+          .eq("user_id", user_id)
+          .select()
+          .single();
+
+        if (error) throw error;
+
+        return new Response(
+          JSON.stringify({ assignment }),
           { headers: { ...corsHeaders, "Content-Type": "application/json" } }
         );
       }
@@ -357,6 +411,44 @@ Deno.serve(async (req) => {
 
         return new Response(
           JSON.stringify({ users: assignments }),
+          { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+
+      case 'search-users': {
+        // Search for users that can be added to a tenant
+        const { query: searchQuery } = data as { query: string };
+        
+        if (!searchQuery || searchQuery.length < 2) {
+          return new Response(
+            JSON.stringify({ users: [] }),
+            { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+          );
+        }
+
+        // Get users matching the search query
+        const { data: profiles, error } = await supabase
+          .from("profiles")
+          .select("id, email, full_name, username, avatar_url")
+          .or(`email.ilike.%${searchQuery}%,full_name.ilike.%${searchQuery}%,username.ilike.%${searchQuery}%`)
+          .limit(10);
+
+        if (error) throw error;
+
+        // If tenantId provided, filter out users already in the tenant
+        let filteredProfiles = profiles || [];
+        if (tenantId && filteredProfiles.length > 0) {
+          const { data: existingAssignments } = await supabase
+            .from("user_tenant_assignments")
+            .select("user_id")
+            .eq("tenant_id", tenantId);
+
+          const existingUserIds = new Set(existingAssignments?.map(a => a.user_id) || []);
+          filteredProfiles = filteredProfiles.filter(p => !existingUserIds.has(p.id));
+        }
+
+        return new Response(
+          JSON.stringify({ users: filteredProfiles }),
           { headers: { ...corsHeaders, "Content-Type": "application/json" } }
         );
       }

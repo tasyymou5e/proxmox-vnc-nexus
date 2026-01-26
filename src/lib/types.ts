@@ -156,6 +156,58 @@ export interface TenantStats {
   usedStorage: number;
 }
 
+// Enhanced tenant stats with live data from Proxmox
+export interface LiveTenantStats {
+  totalVMs: number;
+  runningVMs: number;
+  stoppedVMs: number;
+  totalContainers: number;
+  runningContainers: number;
+  stoppedContainers: number;
+  nodes: {
+    total: number;
+    online: number;
+    offline: number;
+  };
+  cpuUsage: {
+    used: number;
+    total: number;
+    percentage: number;
+  };
+  memoryUsage: {
+    used: number;
+    total: number;
+    percentage: number;
+  };
+  storageUsage: {
+    used: number;
+    total: number;
+    percentage: number;
+  };
+  servers: {
+    total: number;
+    online: number;
+    offline: number;
+  };
+  lastUpdated: string;
+}
+
+// Tenant user with profile info
+export interface TenantUserAssignment {
+  id: string;
+  user_id: string;
+  tenant_id: string;
+  role: TenantRole;
+  created_at: string;
+  profiles: {
+    id: string;
+    email: string;
+    full_name: string | null;
+    username: string | null;
+    avatar_url: string | null;
+  };
+}
+
 export type TenantRole = 'admin' | 'manager' | 'viewer';
 
 export interface UserTenantAssignment {
