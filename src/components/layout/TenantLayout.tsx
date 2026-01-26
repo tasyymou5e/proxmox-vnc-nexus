@@ -32,6 +32,7 @@ import {
   Code2,
   BarChart3,
   Bell,
+  BookOpen,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ApiTreeNav } from "@/components/proxmox/ApiTreeNav";
@@ -76,6 +77,7 @@ export function TenantLayout({ children, showApiTree = false }: TenantLayoutProp
     { label: "Users", href: `/tenants/${tenantId}/users`, icon: Building2 },
     { label: "Audit Log", href: `/tenants/${tenantId}/audit-log`, icon: FileText },
     { label: "Settings", href: `/tenants/${tenantId}/settings`, icon: Palette },
+    { label: "Documentation", href: "/docs", icon: BookOpen },
   ];
 
   const isActive = (path: string) => {

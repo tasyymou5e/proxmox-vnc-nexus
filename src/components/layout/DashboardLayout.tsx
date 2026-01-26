@@ -23,6 +23,7 @@ import {
   Settings,
   Database,
   Building2,
+  BookOpen,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -61,6 +62,11 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
       label: "Settings",
       href: "/profile",
       icon: Settings,
+    },
+    {
+      label: "Documentation",
+      href: "/docs",
+      icon: BookOpen,
     },
     ...(isAdmin
       ? [

@@ -97,9 +97,11 @@ function AppRoutes() {
       <Route
         path="/docs"
         element={
-          <Suspense fallback={<PageLoader />}>
-            <Docs />
-          </Suspense>
+          <ProtectedRoute>
+            <Suspense fallback={<PageLoader />}>
+              <Docs />
+            </Suspense>
+          </ProtectedRoute>
         }
       />
       <Route
