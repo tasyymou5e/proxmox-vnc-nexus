@@ -46,7 +46,7 @@ Deno.serve(async (req) => {
     const supabase = createClient(
       Deno.env.get("SUPABASE_URL")!,
       Deno.env.get("SUPABASE_ANON_KEY")!,
-      { global: { headers: { Authorization: `Bearer ${jwt}` } } }
+      { global: { headers: { Authorization: `Bearer ${jwt}` } }, db: { schema: 'api' } }
     );
 
     const { data: userData, error: userError } = await supabase.auth.getUser(jwt);

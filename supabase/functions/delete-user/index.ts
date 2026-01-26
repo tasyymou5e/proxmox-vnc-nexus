@@ -27,6 +27,7 @@ serve(async (req) => {
 
     const userClient = createClient(supabaseUrl, supabaseAnonKey, {
       global: { headers: { Authorization: authHeader } },
+      db: { schema: 'api' },
     });
 
     // Verify requesting user is admin

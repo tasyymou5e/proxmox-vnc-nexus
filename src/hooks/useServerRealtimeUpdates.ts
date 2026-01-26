@@ -67,7 +67,7 @@ export function useServerRealtimeUpdates(tenantId: string | undefined) {
         "postgres_changes",
         {
           event: "UPDATE",
-          schema: "public",
+          schema: "api",
           table: "proxmox_servers",
           filter: `tenant_id=eq.${tenantId}`,
         },

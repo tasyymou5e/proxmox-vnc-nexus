@@ -30,7 +30,7 @@ export async function getProxmoxCredentials(
   
   // If serverId is provided, get credentials from database
   if (serverId && encryptionKey) {
-    const { data: server, error } = await supabase
+    const { data: server, error } = await supabase.schema('api')
       .from("proxmox_servers")
       .select("host, port, api_token_encrypted, is_active, use_tailscale, tailscale_hostname, tailscale_port, connection_timeout")
       .eq("id", serverId)
