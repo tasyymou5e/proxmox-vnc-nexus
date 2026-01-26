@@ -3,12 +3,14 @@ import { TenantLayout } from "@/components/layout/TenantLayout";
 import { useTenant } from "@/hooks/useTenants";
 import { useLiveTenantStats } from "@/hooks/useLiveTenantStats";
 import { useTenantPermissions } from "@/hooks/useTenantPermissions";
+import { useTenantVMs } from "@/hooks/useTenantVMs";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
-import { useNodes, useClusterResources } from "@/hooks/useProxmoxApi";
+import { VMQuickActions } from "@/components/dashboard/VMQuickActions";
+import { useNodes } from "@/hooks/useProxmoxApi";
 import { 
   Server, 
   Monitor, 
@@ -23,7 +25,8 @@ import {
   PlayCircle,
   StopCircle,
   ArrowLeft,
-  Settings
+  Settings,
+  MonitorPlay
 } from "lucide-react";
 
 function StatCard({ 
@@ -144,11 +147,17 @@ export default function TenantDashboard() {
   const navigate = useNavigate();
   const { data: tenant, isLoading: isTenantLoading } = useTenant(tenantId);
   const { data: liveStats, isLoading: isStatsLoading, refetch, dataUpdatedAt } = useLiveTenantStats(tenantId);
-  const { canManageServers, canManageUsers } = useTenantPermissions(tenantId);
+  const { canManageServers, canManageUsers, canManageVMs } = useTenantPermissions(tenantId);
   const { data: nodes, isLoading: isNodesLoading } = useNodes(tenantId);
+  const { vms, isLoading: isVMsLoading, performAction, isPerformingAction } = useTenantVMs(tenantId);
 
   const nodesData = nodes?.data || [];
   const lastUpdated = dataUpdatedAt ? new Date(dataUpdatedAt).toLocaleTimeString() : null;
+
+  // Get first 5 running/stopped VMs (not templates)
+  const recentVMs = vms
+    .filter(vm => !vm.template && (vm.status === 'running' || vm.status === 'stopped'))
+    .slice(0, 5);
 
   return (
     <TenantLayout>
@@ -264,6 +273,59 @@ export default function TenantDashboard() {
             </CardContent>
           </Card>
         </div>
+
+        {/* VM Quick Actions - visible to managers+ */}
+        {canManageVMs && (
+          <div>
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-lg font-semibold flex items-center gap-2">
+                <MonitorPlay className="h-5 w-5" />
+                VM Quick Actions
+              </h2>
+              <Button variant="ghost" size="sm" asChild>
+                <Link to={`/tenants/${tenantId}/servers`}>
+                  View All VMs
+                </Link>
+              </Button>
+            </div>
+            
+            {isVMsLoading ? (
+              <div className="space-y-2">
+                {[1, 2, 3].map(i => (
+                  <Skeleton key={i} className="h-16 w-full" />
+                ))}
+              </div>
+            ) : recentVMs.length === 0 ? (
+              <Card className="border-dashed">
+                <CardContent className="flex items-center justify-center py-8 text-muted-foreground">
+                  No virtual machines found
+                </CardContent>
+              </Card>
+            ) : (
+              <div className="space-y-2">
+                {recentVMs.map(vm => (
+                  <VMQuickActions
+                    key={`${vm.serverId}-${vm.node}-${vm.vmid}`}
+                    vm={vm}
+                    onAction={async (action) => {
+                      performAction({
+                        vmid: vm.vmid,
+                        node: vm.node,
+                        action,
+                        vmType: vm.type,
+                        vmName: vm.name,
+                        serverId: vm.serverId,
+                        serverName: vm.serverName,
+                      });
+                    }}
+                    isPerformingAction={isPerformingAction}
+                    canManage={canManageVMs}
+                  />
+                ))}
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Resource Usage */}
         <div>

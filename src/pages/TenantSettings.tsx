@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useParams } from "react-router-dom";
 import { TenantLayout } from "@/components/layout/TenantLayout";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -9,16 +9,21 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useTenantSettings } from "@/hooks/useTenantSettings";
 import { useTenantPermissions } from "@/hooks/useTenantPermissions";
-import { Palette, Bell, Settings, Save, Loader2 } from "lucide-react";
+import { useLogoUpload } from "@/hooks/useLogoUpload";
+import { toast } from "@/hooks/use-toast";
+import { Palette, Bell, Settings, Save, Loader2, Upload, Trash2, Image } from "lucide-react";
 import type { TenantSettings as TenantSettingsType } from "@/lib/types";
 
 export default function TenantSettings() {
   const { tenantId } = useParams<{ tenantId: string }>();
   const { settings, isLoading, updateSettings, isUpdating } = useTenantSettings(tenantId);
   const { canManageSettings } = useTenantPermissions(tenantId);
+  const { uploadLogo, deleteLogo, isUploading } = useLogoUpload(tenantId);
   
   const [formData, setFormData] = useState<Partial<TenantSettingsType>>({});
   const [hasChanges, setHasChanges] = useState(false);
+  const [isDragging, setIsDragging] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (settings) {
@@ -46,6 +51,61 @@ export default function TenantSettings() {
   const handleSave = () => {
     updateSettings(formData);
     setHasChanges(false);
+  };
+
+  const handleFileSelect = async (file: File) => {
+    try {
+      const url = await uploadLogo(file);
+      if (url) {
+        handleChange("logo_url", url);
+        toast({ title: "Logo uploaded", description: "Your logo has been updated." });
+      }
+    } catch (error) {
+      toast({ 
+        title: "Upload failed", 
+        description: (error as Error).message, 
+        variant: "destructive" 
+      });
+    }
+  };
+
+  const handleRemoveLogo = async () => {
+    try {
+      await deleteLogo();
+      handleChange("logo_url", null);
+      toast({ title: "Logo removed", description: "Your logo has been removed." });
+    } catch (error) {
+      toast({ 
+        title: "Failed to remove logo", 
+        description: (error as Error).message, 
+        variant: "destructive" 
+      });
+    }
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(false);
+    
+    const file = e.dataTransfer.files[0];
+    if (file && file.type.startsWith('image/')) {
+      handleFileSelect(file);
+    } else {
+      toast({ 
+        title: "Invalid file", 
+        description: "Please drop an image file (JPEG, PNG, WebP, or SVG)", 
+        variant: "destructive" 
+      });
+    }
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(true);
+  };
+
+  const handleDragLeave = () => {
+    setIsDragging(false);
   };
 
   if (isLoading) {
@@ -88,7 +148,7 @@ export default function TenantSettings() {
 
         <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
           {/* Branding Card */}
-          <Card>
+          <Card className="lg:row-span-2">
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
                 <Palette className="h-5 w-5" />
@@ -98,7 +158,74 @@ export default function TenantSettings() {
                 Customize the look and feel of your tenant
               </CardDescription>
             </CardHeader>
-            <CardContent className="space-y-4">
+            <CardContent className="space-y-6">
+              {/* Logo Upload */}
+              <div className="space-y-2">
+                <Label>Logo</Label>
+                <div className="flex gap-4">
+                  {/* Preview */}
+                  <div className="w-20 h-20 border rounded-lg flex items-center justify-center bg-muted overflow-hidden">
+                    {formData.logo_url ? (
+                      <img 
+                        src={formData.logo_url} 
+                        alt="Tenant logo" 
+                        className="w-full h-full object-contain"
+                      />
+                    ) : (
+                      <Image className="h-8 w-8 text-muted-foreground" />
+                    )}
+                  </div>
+                  
+                  {/* Upload Zone */}
+                  <div 
+                    className={`flex-1 border-2 border-dashed rounded-lg p-4 text-center transition-colors cursor-pointer ${
+                      isDragging 
+                        ? 'border-primary bg-primary/5' 
+                        : 'border-border hover:border-primary/50'
+                    } ${!canManageSettings ? 'opacity-50 pointer-events-none' : ''}`}
+                    onDrop={handleDrop}
+                    onDragOver={handleDragOver}
+                    onDragLeave={handleDragLeave}
+                    onClick={() => canManageSettings && fileInputRef.current?.click()}
+                  >
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      accept="image/jpeg,image/png,image/webp,image/svg+xml"
+                      className="hidden"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (file) handleFileSelect(file);
+                      }}
+                      disabled={!canManageSettings || isUploading}
+                    />
+                    {isUploading ? (
+                      <Loader2 className="h-6 w-6 mx-auto animate-spin text-muted-foreground" />
+                    ) : (
+                      <Upload className="h-6 w-6 mx-auto text-muted-foreground" />
+                    )}
+                    <p className="text-xs text-muted-foreground mt-2">
+                      Drop image or click to upload
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      JPEG, PNG, WebP, SVG • Max 2MB
+                    </p>
+                  </div>
+                </div>
+                {formData.logo_url && canManageSettings && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={handleRemoveLogo}
+                    disabled={isUploading}
+                    className="text-destructive hover:text-destructive"
+                  >
+                    <Trash2 className="h-4 w-4 mr-1" />
+                    Remove Logo
+                  </Button>
+                )}
+              </div>
+
               <div className="space-y-2">
                 <Label htmlFor="primary_color">Primary Color</Label>
                 <div className="flex items-center gap-2">
@@ -157,18 +284,6 @@ export default function TenantSettings() {
                     disabled={!canManageSettings}
                   />
                 </div>
-              </div>
-
-              <div className="space-y-2">
-                <Label htmlFor="logo_url">Logo URL</Label>
-                <Input
-                  id="logo_url"
-                  type="url"
-                  value={formData.logo_url || ""}
-                  onChange={(e) => handleChange("logo_url", e.target.value || null)}
-                  placeholder="https://example.com/logo.png"
-                  disabled={!canManageSettings}
-                />
               </div>
             </CardContent>
           </Card>
