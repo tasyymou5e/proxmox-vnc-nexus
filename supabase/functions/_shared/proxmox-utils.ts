@@ -22,7 +22,7 @@ export interface ProxmoxCredentials {
 }
 
 export async function getProxmoxCredentials(
-  supabase: ReturnType<typeof createClient>,
+  supabase: any,
   userId: string,
   serverId?: string
 ): Promise<ProxmoxCredentials> {
@@ -30,7 +30,7 @@ export async function getProxmoxCredentials(
   
   // If serverId is provided, get credentials from database
   if (serverId && encryptionKey) {
-    const { data: server, error } = await supabase.schema('api')
+    const { data: server, error } = await supabase
       .from("proxmox_servers")
       .select("host, port, api_token_encrypted, is_active, use_tailscale, tailscale_hostname, tailscale_port, connection_timeout")
       .eq("id", serverId)

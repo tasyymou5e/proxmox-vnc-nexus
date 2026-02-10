@@ -209,7 +209,7 @@ Deno.serve(async (req) => {
           console.error(`Failed to fetch VMs from ${server.name}:`, await proxmoxResponse.text());
         }
       } catch (err) {
-        console.error(`Error fetching VMs from ${server.name}:`, err.message);
+        console.error(`Error fetching VMs from ${server.name}:`, (err as Error).message);
       }
     }));
 
@@ -223,14 +223,14 @@ Deno.serve(async (req) => {
   } catch (error) {
     console.error("List VMs error:", error);
     return new Response(
-      JSON.stringify({ error: error.message || "Internal server error" }),
+      JSON.stringify({ error: (error as Error).message || "Internal server error" }),
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   }
 });
 
 async function filterAndEnrichVMs(
-  supabase: ReturnType<typeof createClient>,
+  supabase: any,
   vms: VM[],
   userId: string,
   isAdmin: boolean

@@ -70,7 +70,7 @@ async function fetchProxmoxApi(
     const json = await response.json();
     return { success: true, data: json.data };
   } catch (error) {
-    return { success: false, error: error.message };
+    return { success: false, error: (error as Error).message };
   }
 }
 
@@ -280,7 +280,7 @@ Deno.serve(async (req) => {
     });
   } catch (error) {
     console.error("tenant-stats error:", error);
-    return new Response(JSON.stringify({ error: error.message }), {
+    return new Response(JSON.stringify({ error: (error as Error).message }), {
       status: 500,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });

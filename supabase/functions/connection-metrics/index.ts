@@ -226,13 +226,13 @@ Deno.serve(async (req) => {
   } catch (error) {
     console.error("Connection metrics error:", error);
     return new Response(
-      JSON.stringify({ error: error.message || "Internal server error" }),
+      JSON.stringify({ error: (error as Error).message || "Internal server error" }),
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   }
 });
 
-async function updateServerStats(supabase: ReturnType<typeof createClient>, serverId: string) {
+async function updateServerStats(supabase: any, serverId: string) {
   // Get last 100 successful connections
   const { data: metrics } = await supabase
     .from("connection_metrics")

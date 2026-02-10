@@ -21,7 +21,7 @@ interface ActionRequest {
 
 // Helper to log audit events
 async function logAudit(
-  supabase: ReturnType<typeof createClient>,
+  supabase: any,
   tenantId: string,
   userId: string,
   actionType: string,
@@ -158,7 +158,7 @@ Deno.serve(async (req) => {
       proxmoxToken = credentials.token;
     } catch (error) {
       return new Response(
-        JSON.stringify({ error: error.message }),
+        JSON.stringify({ error: (error as Error).message }),
         { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
@@ -220,7 +220,7 @@ Deno.serve(async (req) => {
   } catch (error) {
     console.error("VM Action error:", error);
     return new Response(
-      JSON.stringify({ error: error.message || "Internal server error" }),
+      JSON.stringify({ error: (error as Error).message || "Internal server error" }),
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   }
