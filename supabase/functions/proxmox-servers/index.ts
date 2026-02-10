@@ -124,7 +124,7 @@ interface ImportError {
 
 // Helper to check if user has tenant access with specific roles
 async function checkTenantAccess(
-  supabase: ReturnType<typeof createClient>,
+  supabase: any,
   userId: string,
   tenantId: string,
   requiredRoles: string[]
