@@ -543,7 +543,7 @@ Deno.serve(async (req) => {
 
           const testData = await testResponse!.json();
 
-          if (!testResponse.ok) {
+          if (!testResponse!.ok) {
             // Update status if server_id provided
             if (server_id) {
               await supabase
