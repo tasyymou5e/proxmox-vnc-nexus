@@ -560,7 +560,7 @@ Deno.serve(async (req) => {
               JSON.stringify({ 
                 success: false, 
                 error: testData.errors || "Failed to connect to Proxmox server",
-                status: testResponse.status 
+                status: testResponse!.status 
               }),
               { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
             );
