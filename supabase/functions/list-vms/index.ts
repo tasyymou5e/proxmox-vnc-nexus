@@ -209,7 +209,7 @@ Deno.serve(async (req) => {
           console.error(`Failed to fetch VMs from ${server.name}:`, await proxmoxResponse.text());
         }
       } catch (err) {
-        console.error(`Error fetching VMs from ${server.name}:`, err.message);
+        console.error(`Error fetching VMs from ${server.name}:`, (err as Error).message);
       }
     }));
 
