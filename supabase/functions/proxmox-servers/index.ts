@@ -596,7 +596,7 @@ Deno.serve(async (req) => {
               .update({ 
                 connection_status: 'offline',
                 last_health_check_at: new Date().toISOString(),
-                health_check_error: error.message || "Connection failed"
+                health_check_error: (error as Error).message || "Connection failed"
               })
               .eq("id", server_id);
           }
