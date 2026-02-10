@@ -39,9 +39,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     let mounted = true;
 
-    // Set up auth state listener FIRST
+    // onAuthStateChange fires INITIAL_SESSION on setup, so no separate
+    // getSession() call is needed. This avoids the race condition where
+    // both callbacks compete to set state simultaneously.
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      async (event, session) => {
+      async (_event, session) => {
         if (!mounted) return;
 
         setSession(session);
@@ -57,21 +59,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setLoading(false);
       }
     );
-
-    // Then get initial session
-    supabase.auth.getSession().then(async ({ data: { session } }) => {
-      if (!mounted) return;
-
-      setSession(session);
-      setUser(session?.user ?? null);
-
-      if (session?.user) {
-        const isUserAdmin = await checkUserRole(session.user.id);
-        if (mounted) setIsAdmin(isUserAdmin);
-      }
-
-      setLoading(false);
-    });
 
     return () => {
       mounted = false;

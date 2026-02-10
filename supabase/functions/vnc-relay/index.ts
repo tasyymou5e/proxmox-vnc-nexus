@@ -25,22 +25,30 @@ Deno.serve(async (req) => {
   }
 
   try {
-    // Extract params from URL (browsers can't send custom headers for WS)
     const url = new URL(req.url);
-    const jwt = url.searchParams.get("jwt");
     const node = url.searchParams.get("node");
     const vmid = url.searchParams.get("vmid");
     const vmType = url.searchParams.get("type") || "qemu";
 
+    // Extract JWT from WebSocket sub-protocol header (security: avoids exposing token in URL)
+    // Client sends: Sec-WebSocket-Protocol: auth-<jwt>
+    // Falls back to URL query param for backward compatibility
+    const protocols = req.headers.get("sec-websocket-protocol") || "";
+    const authProtocol = protocols.split(",").map(p => p.trim()).find(p => p.startsWith("auth-"));
+    const jwt = authProtocol ? authProtocol.slice(5) : url.searchParams.get("jwt");
+
     if (!jwt || !node || !vmid) {
       return new Response(
-        JSON.stringify({ error: "Missing required parameters: jwt, node, vmid" }),
+        JSON.stringify({ error: "Missing required parameters: jwt (via sub-protocol or query), node, vmid" }),
         {
           status: 400,
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         }
       );
     }
+
+    // Track the auth protocol to echo it back in the upgrade response
+    const negotiatedProtocol = authProtocol || null;
 
     // Authenticate user
     const supabase = createClient(
@@ -137,8 +145,12 @@ Deno.serve(async (req) => {
     // Build Proxmox WebSocket URL
     const proxmoxWsUrl = `wss://${proxmoxHost}:${proxmoxPort}/api2/json/nodes/${node}/${vmType}/${vmid}/vncwebsocket?port=${port}&vncticket=${encodeURIComponent(ticket)}`;
 
-    // Upgrade client connection
-    const { socket: clientSocket, response } = Deno.upgradeWebSocket(req);
+    // Upgrade client connection, echoing back the auth sub-protocol if used
+    const upgradeOpts: Deno.UpgradeWebSocketOptions = {};
+    if (negotiatedProtocol) {
+      upgradeOpts.protocol = negotiatedProtocol;
+    }
+    const { socket: clientSocket, response } = Deno.upgradeWebSocket(req, upgradeOpts);
 
     clientSocket.onopen = () => {
       console.log("Client WebSocket connected, connecting to Proxmox...");

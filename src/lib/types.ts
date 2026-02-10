@@ -31,6 +31,7 @@ export interface VNCConnection {
   vmid: number;
   vmType: "qemu" | "lxc";
   relayUrl?: string; // WebSocket URL to the edge function relay
+  wsAuthToken?: string; // JWT for WebSocket sub-protocol auth (not sent in URL)
 }
 
 export interface UserProfile {

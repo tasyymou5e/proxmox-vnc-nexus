@@ -66,26 +66,26 @@ export function useConnectionHealthAlerts({
     refetchInterval: checkIntervalMs,
   });
 
-  // Log alert to audit log
+  // Log alert to audit log via edge function (avoids direct client-side table writes)
   const logAlert = useCallback(async (alert: HealthAlert) => {
     try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) return;
-
-      await supabase.from("audit_logs").insert({
-        user_id: user.id,
-        tenant_id: tenantId,
-        action_type: alert.alertType === "recovered" ? "server_recovered" : "server_alert",
-        resource_type: "proxmox_server",
-        resource_id: alert.serverId,
-        resource_name: alert.serverName,
-        details: {
-          alert_type: alert.alertType,
-          success_rate: alert.successRate,
-          threshold: alert.threshold,
-          timestamp: alert.timestamp.toISOString(),
+      const { error } = await supabase.functions.invoke("admin-actions", {
+        body: {
+          action: "log-alert",
+          tenant_id: tenantId,
+          action_type: alert.alertType === "recovered" ? "server_recovered" : "server_alert",
+          resource_type: "proxmox_server",
+          resource_id: alert.serverId,
+          resource_name: alert.serverName,
+          details: {
+            alert_type: alert.alertType,
+            success_rate: alert.successRate,
+            threshold: alert.threshold,
+            timestamp: alert.timestamp.toISOString(),
+          },
         },
       });
+      if (error) console.error("Failed to log alert:", error);
     } catch (err) {
       console.error("Failed to log alert:", err);
     }
@@ -212,9 +212,9 @@ export function useConnectionHealthAlerts({
     alerts: currentAlerts,
     refetch,
     isEnabled: settings?.notify_on_server_offline ?? true,
-    thresholds: {
-      successRate: effectiveSuccessThreshold,
-      latencyMs: effectiveLatencyThreshold,
-    },
+        thresholds: {
+          successRate: effectiveSuccessThreshold,
+          latencyMs: effectiveLatencyThreshold,
+        },
   };
 }

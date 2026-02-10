@@ -9,16 +9,7 @@ import type {
   BulkImportResult 
 } from "@/lib/types";
 
-async function getAuthHeaders(): Promise<Record<string, string>> {
-  const { data: { session } } = await supabase.auth.getSession();
-  if (!session?.access_token) {
-    throw new Error("Not authenticated");
-  }
-  return {
-    Authorization: `Bearer ${session.access_token}`,
-    "Content-Type": "application/json",
-  };
-}
+import { getAuthHeaders } from "@/lib/api";
 
 const HEALTH_CHECK_INTERVAL = 120000; // 2 minutes
 
@@ -252,23 +243,26 @@ export function useProxmoxServers(tenantId?: string) {
     return data;
   }, [fetchServers, tenantId]);
 
+  // Track whether we have servers via a ref to avoid re-triggering the interval effect
+  const hasServersRef = useRef(false);
+  useEffect(() => {
+    hasServersRef.current = servers.length > 0;
+  }, [servers.length]);
+
   // Auto-refresh health checks every 2 minutes when page is visible
   useEffect(() => {
     const handleVisibilityChange = () => {
-      if (document.visibilityState === 'visible' && servers.length > 0) {
-        // Run health check when page becomes visible
+      if (document.visibilityState === 'visible' && hasServersRef.current) {
         runHealthChecks();
       }
     };
 
-    // Set up interval for periodic health checks
-    if (servers.length > 0) {
-      intervalRef.current = setInterval(() => {
-        if (document.visibilityState === 'visible') {
-          runHealthChecks();
-        }
-      }, HEALTH_CHECK_INTERVAL);
-    }
+    // Set up interval for periodic health checks (always runs, checks ref inside)
+    intervalRef.current = setInterval(() => {
+      if (document.visibilityState === 'visible' && hasServersRef.current) {
+        runHealthChecks();
+      }
+    }, HEALTH_CHECK_INTERVAL);
 
     document.addEventListener('visibilitychange', handleVisibilityChange);
 
@@ -278,7 +272,7 @@ export function useProxmoxServers(tenantId?: string) {
         clearInterval(intervalRef.current);
       }
     };
-  }, [servers.length, runHealthChecks]);
+  }, [runHealthChecks]);
 
   return {
     servers,

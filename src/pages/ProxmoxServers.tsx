@@ -140,7 +140,7 @@ export default function ProxmoxServers({ tenantId, hideLayout }: ProxmoxServersP
     testConnection,
     runHealthChecks,
     bulkImportServers,
-  } = useProxmoxServers();
+  } = useProxmoxServers(tenantId);
 
   const [searchQuery, setSearchQuery] = useState("");
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -410,14 +410,19 @@ export default function ProxmoxServers({ tenantId, hideLayout }: ProxmoxServersP
             <Button
               variant="outline"
               onClick={() => setImportDialogOpen(true)}
-              disabled={servers.length >= 50}
+              disabled={!tenantId || servers.length >= 50}
+              title={!tenantId ? "Select a tenant first to import servers" : undefined}
             >
               <Upload className="h-4 w-4 mr-2" />
               Import CSV
             </Button>
             <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
               <DialogTrigger asChild>
-                <Button onClick={() => handleOpenDialog()} disabled={servers.length >= 50}>
+                <Button
+                  onClick={() => handleOpenDialog()}
+                  disabled={!tenantId || servers.length >= 50}
+                  title={!tenantId ? "Select a tenant first to add servers" : undefined}
+                >
                   <Plus className="h-4 w-4 mr-2" />
                   Add Server
                 </Button>
@@ -632,14 +637,16 @@ export default function ProxmoxServers({ tenantId, hideLayout }: ProxmoxServersP
               <Server className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
               <h3 className="text-lg font-medium mb-2">No servers configured</h3>
               <p className="text-muted-foreground mb-4">
-                Add your first Proxmox server to get started
+                {tenantId
+                  ? "Add your first Proxmox server to get started"
+                  : "Navigate to a tenant to manage servers"}
               </p>
               <div className="flex items-center justify-center gap-2">
-                <Button onClick={() => handleOpenDialog()}>
+                <Button onClick={() => handleOpenDialog()} disabled={!tenantId}>
                   <Plus className="h-4 w-4 mr-2" />
                   Add Server
                 </Button>
-                <Button variant="outline" onClick={() => setImportDialogOpen(true)}>
+                <Button variant="outline" onClick={() => setImportDialogOpen(true)} disabled={!tenantId}>
                   <Upload className="h-4 w-4 mr-2" />
                   Import CSV
                 </Button>

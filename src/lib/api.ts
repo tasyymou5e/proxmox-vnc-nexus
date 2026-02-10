@@ -24,7 +24,7 @@ export class APIException extends Error {
   }
 }
 
-async function getAuthHeaders(): Promise<Record<string, string>> {
+export async function getAuthHeaders(): Promise<Record<string, string>> {
   const {
     data: { session },
   } = await supabase.auth.getSession();
@@ -90,17 +90,18 @@ export async function getVMConsole(
 
   const data = await handleResponse<VNCConnection>(response);
 
-  // Build relay URL with JWT for WebSocket connection
+  // Build relay URL without JWT (JWT passed via WebSocket sub-protocol for security)
   const {
     data: { session },
   } = await supabase.auth.getSession();
   const jwt = session?.access_token;
 
-  const relayUrl = `wss://${API_CONFIG.SUPABASE_URL.replace("https://", "")}${API_CONFIG.FUNCTIONS_PATH}/vnc-relay?jwt=${jwt}&node=${node}&vmid=${vmid}&type=${vmType}`;
+  const relayUrl = `wss://${API_CONFIG.SUPABASE_URL.replace("https://", "")}${API_CONFIG.FUNCTIONS_PATH}/vnc-relay?node=${node}&vmid=${vmid}&type=${vmType}`;
 
   return {
     ...data,
     relayUrl,
+    wsAuthToken: jwt || undefined,
   };
 }
 

@@ -9,9 +9,10 @@ export function useLogoUpload(tenantId: string | undefined) {
     if (!tenantId) throw new Error("Tenant ID required");
     
     // Validate file type
-    const allowedTypes = ['image/jpeg', 'image/png', 'image/webp', 'image/svg+xml'];
+    // SVG excluded to prevent XSS via embedded JavaScript in SVG files
+    const allowedTypes = ['image/jpeg', 'image/png', 'image/webp'];
     if (!allowedTypes.includes(file.type)) {
-      throw new Error("Invalid file type. Allowed: JPEG, PNG, WebP, SVG");
+      throw new Error("Invalid file type. Allowed: JPEG, PNG, WebP");
     }
     
     // Validate file size (2MB max)

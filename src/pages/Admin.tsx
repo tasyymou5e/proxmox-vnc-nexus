@@ -54,8 +54,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "@/hooks/use-toast";
 import { Users, Plus, Trash2, Server, Shield, ShieldCheck, ShieldOff, UserX } from "lucide-react";
 import type { UserProfile, VMAssignment } from "@/lib/types";
-
-const SUPABASE_URL = "https://lbfabewnshfjdjfosqxl.supabase.co";
+import { API_CONFIG } from "@/lib/constants";
 
 interface UserWithRole extends UserProfile {
   role: "admin" | "user";
@@ -154,15 +153,29 @@ export default function Admin() {
     }
 
     try {
-      const { error } = await supabase.from("user_vm_assignments").insert({
-        user_id: selectedUser,
-        vm_id: parseInt(newAssignment.vmId),
-        node_name: newAssignment.nodeName,
-        vm_name: newAssignment.vmName || null,
-        permissions: newAssignment.permissions,
+      const parsedVmId = parseInt(newAssignment.vmId, 10);
+      if (isNaN(parsedVmId)) {
+        toast({
+          title: "Invalid VM ID",
+          description: "VM ID must be a valid number",
+          variant: "destructive",
+        });
+        return;
+      }
+
+      const { data, error } = await supabase.functions.invoke("admin-actions", {
+        body: {
+          action: "assign-vm",
+          user_id: selectedUser,
+          vm_id: parsedVmId,
+          node_name: newAssignment.nodeName,
+          vm_name: newAssignment.vmName || null,
+          permissions: newAssignment.permissions,
+        },
       });
 
       if (error) throw error;
+      if (data?.error) throw new Error(data.error);
 
       toast({
         title: "Assignment created",
@@ -189,12 +202,12 @@ export default function Admin() {
 
   const handleDeleteAssignment = async (assignmentId: string) => {
     try {
-      const { error } = await supabase
-        .from("user_vm_assignments")
-        .delete()
-        .eq("id", assignmentId);
+      const { data, error } = await supabase.functions.invoke("admin-actions", {
+        body: { action: "delete-assignment", assignment_id: assignmentId },
+      });
 
       if (error) throw error;
+      if (data?.error) throw new Error(data.error);
 
       toast({
         title: "Assignment removed",
@@ -227,12 +240,16 @@ export default function Admin() {
     try {
       const newRole = roleChangeUser.role === "admin" ? "user" : "admin";
 
-      const { error } = await supabase
-        .from("user_roles")
-        .update({ role: newRole })
-        .eq("user_id", roleChangeUser.id);
+      const { data, error } = await supabase.functions.invoke("admin-actions", {
+        body: {
+          action: "change-role",
+          user_id: roleChangeUser.id,
+          new_role: newRole,
+        },
+      });
 
       if (error) throw error;
+      if (data?.error) throw new Error(data.error);
 
       toast({
         title: "Role updated",
@@ -261,7 +278,7 @@ export default function Admin() {
       if (!session) throw new Error("Not authenticated");
 
       const response = await fetch(
-        `${SUPABASE_URL}/functions/v1/delete-user`,
+        `${API_CONFIG.SUPABASE_URL}${API_CONFIG.FUNCTIONS_PATH}/delete-user`,
         {
           method: "POST",
           headers: {

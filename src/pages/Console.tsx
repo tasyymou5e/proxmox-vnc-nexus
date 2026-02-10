@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { useParams, useSearchParams, useNavigate } from "react-router-dom";
 import { DashboardLayout } from "@/components/layout";
 import { ConsoleViewer } from "@/components/console";
@@ -18,14 +18,20 @@ export default function Console() {
   const [connection, setConnection] = useState<VNCConnection | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const fetchConsole = async () => {
+  const fetchConsole = useCallback(async () => {
     if (!node || !vmid) return;
+
+    const parsedVmid = parseInt(vmid, 10);
+    if (isNaN(parsedVmid)) {
+      setError("Invalid VM ID");
+      return;
+    }
 
     setError(null);
     try {
       const data = await vmConsole.mutateAsync({
         node,
-        vmid: parseInt(vmid),
+        vmid: parsedVmid,
         vmType,
         serverId: serverId || undefined,
       });
@@ -33,11 +39,11 @@ export default function Console() {
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to connect");
     }
-  };
+  }, [node, vmid, vmType, serverId, vmConsole]);
 
   useEffect(() => {
     fetchConsole();
-  }, [node, vmid, vmType, serverId]);
+  }, [fetchConsole]);
 
   return (
     <DashboardLayout>

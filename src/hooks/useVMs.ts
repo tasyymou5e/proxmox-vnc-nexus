@@ -31,30 +31,41 @@ export function useVMAction() {
       vmType?: "qemu" | "lxc";
     }) => performVMAction(node, vmid, action, vmType),
 
-    // Optimistic update
+    // Optimistic update - use getQueriesData to match all ["vms", *] cache entries
     onMutate: async ({ node, vmid, action }) => {
       await queryClient.cancelQueries({ queryKey: ["vms"] });
-      const previousVMs = queryClient.getQueryData<{ vms: VM[]; isAdmin: boolean }>(["vms"]);
 
-      if (previousVMs) {
-        const newStatus = getOptimisticStatus(action);
-        queryClient.setQueryData<{ vms: VM[]; isAdmin: boolean }>(["vms"], {
-          ...previousVMs,
-          vms: previousVMs.vms.map((vm) =>
-            vm.vmid === vmid && vm.node === node
-              ? { ...vm, status: newStatus }
-              : vm
-          ),
-        });
-      }
+      // Capture all matching cache entries for rollback
+      const previousEntries = queryClient.getQueriesData<{ vms: VM[]; isAdmin: boolean }>({
+        queryKey: ["vms"],
+      });
 
-      return { previousVMs };
+      const newStatus = getOptimisticStatus(action);
+
+      // Update every matching cache entry
+      previousEntries.forEach(([queryKey, data]) => {
+        if (data) {
+          queryClient.setQueryData<{ vms: VM[]; isAdmin: boolean }>(queryKey, {
+            ...data,
+            vms: data.vms.map((vm) =>
+              vm.vmid === vmid && vm.node === node
+                ? { ...vm, status: newStatus }
+                : vm
+            ),
+          });
+        }
+      });
+
+      return { previousEntries };
     },
 
     onError: (_err, _variables, context) => {
-      if (context?.previousVMs) {
-        queryClient.setQueryData(["vms"], context.previousVMs);
-      }
+      // Rollback all cache entries
+      context?.previousEntries?.forEach(([queryKey, data]) => {
+        if (data) {
+          queryClient.setQueryData(queryKey, data);
+        }
+      });
     },
 
     onSettled: () => {
@@ -107,14 +118,16 @@ export function useVMConsole() {
       if (error) throw error;
       if (!data) throw new Error("No connection data received");
       
-      // Build relay URL with JWT for WebSocket connection
+      // Build relay URL without JWT (JWT passed via WebSocket sub-protocol for security)
       const jwt = session.access_token;
-      const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || "https://lbfabewnshfjdjfosqxl.supabase.co";
-      const relayUrl = `wss://${supabaseUrl.replace("https://", "")}/functions/v1/vnc-relay?jwt=${jwt}&node=${node}&vmid=${vmid}&type=${vmType}${serverId ? `&serverId=${serverId}` : ''}`;
+      const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+      if (!supabaseUrl) throw new Error("Missing VITE_SUPABASE_URL environment variable");
+      const relayUrl = `wss://${supabaseUrl.replace("https://", "")}/functions/v1/vnc-relay?node=${node}&vmid=${vmid}&type=${vmType}${serverId ? `&serverId=${serverId}` : ''}`;
 
       return {
         ...data,
         relayUrl,
+        wsAuthToken: jwt,
       };
     },
   });

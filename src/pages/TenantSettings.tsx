@@ -97,7 +97,7 @@ export default function TenantSettings() {
     } else {
       toast({ 
         title: "Invalid file", 
-        description: "Please drop an image file (JPEG, PNG, WebP, or SVG)", 
+        description: "Please drop an image file (JPEG, PNG, or WebP)", 
         variant: "destructive" 
       });
     }
@@ -195,7 +195,7 @@ export default function TenantSettings() {
                     <input
                       ref={fileInputRef}
                       type="file"
-                      accept="image/jpeg,image/png,image/webp,image/svg+xml"
+                      accept="image/jpeg,image/png,image/webp"
                       className="hidden"
                       onChange={(e) => {
                         const file = e.target.files?.[0];
@@ -212,7 +212,7 @@ export default function TenantSettings() {
                       Drop image or click to upload
                     </p>
                     <p className="text-xs text-muted-foreground">
-                      JPEG, PNG, WebP, SVG • Max 2MB
+                      JPEG, PNG, WebP • Max 2MB
                     </p>
                   </div>
                 </div>

@@ -3,8 +3,8 @@ import App from './App.tsx'
 import './index.css'
 
 // Proxmox VNC Nexus - Connection Broker Application
-// Build version for cache invalidation
-const BUILD_VERSION = "2026-01-26T23:20:00Z";
-console.log(`Proxmox VNC Nexus v${BUILD_VERSION}`);
+// Build version injected at compile time by Vite (see vite.config.ts)
+declare const __BUILD_VERSION__: string;
+console.log(`Proxmox VNC Nexus v${__BUILD_VERSION__}`);
 
 createRoot(document.getElementById("root")!).render(<App />);

@@ -59,8 +59,16 @@ export function ConsoleViewer({
     setConnectionStatus("connecting");
 
     try {
+      // Pass JWT via WebSocket sub-protocol instead of URL query parameter
+      // This prevents the token from appearing in browser history, server logs, or Referer headers
+      const wsProtocols: string[] = [];
+      if (connection.wsAuthToken) {
+        wsProtocols.push(`auth-${connection.wsAuthToken}`);
+      }
+
       const rfb = new RFB(canvasRef.current, connection.relayUrl, {
         credentials: { password: connection.ticket },
+        wsProtocols,
       });
 
       // Configure RFB
@@ -123,7 +131,7 @@ export function ConsoleViewer({
         variant: "destructive",
       });
     }
-  }, [connection?.relayUrl, connection?.ticket]);
+  }, [connection?.relayUrl, connection?.ticket, connection?.wsAuthToken]);
 
   const toggleFullscreen = useCallback(() => {
     if (!containerRef.current) return;

@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Plus, Search, Building2, Server, Loader2, MoreHorizontal, Pencil, Trash2, Users } from "lucide-react";
+import { Plus, Search, Building2, Loader2, MoreHorizontal, Pencil, Trash2, Users } from "lucide-react";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -260,10 +260,6 @@ export default function TenantSelector() {
                   )}
                   
                   <div className="flex items-center gap-4 text-sm">
-                    <div className="flex items-center gap-1">
-                      <Server className="h-4 w-4 text-muted-foreground" />
-                      <span>0 servers</span>
-                    </div>
                     <Badge variant={tenant.is_active ? "default" : "secondary"}>
                       {tenant.is_active ? "Active" : "Inactive"}
                     </Badge>

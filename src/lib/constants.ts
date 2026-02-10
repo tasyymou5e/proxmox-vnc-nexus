@@ -1,6 +1,10 @@
 // API Configuration
 export const API_CONFIG = {
-  SUPABASE_URL: "https://lbfabewnshfjdjfosqxl.supabase.co",
+  get SUPABASE_URL(): string {
+    const url = import.meta.env.VITE_SUPABASE_URL;
+    if (!url) throw new Error("Missing VITE_SUPABASE_URL environment variable");
+    return url;
+  },
   FUNCTIONS_PATH: "/functions/v1",
 } as const;
 
