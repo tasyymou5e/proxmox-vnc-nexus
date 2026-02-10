@@ -232,7 +232,7 @@ Deno.serve(async (req) => {
   }
 });
 
-async function updateServerStats(supabase: ReturnType<typeof createClient>, serverId: string) {
+async function updateServerStats(supabase: any, serverId: string) {
   // Get last 100 successful connections
   const { data: metrics } = await supabase
     .from("connection_metrics")

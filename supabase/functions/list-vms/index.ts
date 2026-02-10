@@ -230,7 +230,7 @@ Deno.serve(async (req) => {
 });
 
 async function filterAndEnrichVMs(
-  supabase: ReturnType<typeof createClient>,
+  supabase: any,
   vms: VM[],
   userId: string,
   isAdmin: boolean
