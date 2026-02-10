@@ -29,7 +29,7 @@ interface TenantSettingsRequest {
 
 // Helper to log audit events
 async function logAudit(
-  supabase: ReturnType<typeof createClient>,
+  supabase: any,
   tenantId: string,
   userId: string,
   actionType: string,
