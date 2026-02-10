@@ -70,7 +70,7 @@ async function fetchProxmoxApi(
     const json = await response.json();
     return { success: true, data: json.data };
   } catch (error) {
-    return { success: false, error: error.message };
+    return { success: false, error: (error as Error).message };
   }
 }
 
