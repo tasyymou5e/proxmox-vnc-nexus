@@ -604,7 +604,7 @@ Deno.serve(async (req) => {
           return new Response(
             JSON.stringify({ 
               success: false, 
-              error: error.message || "Connection failed" 
+              error: (error as Error).message || "Connection failed" 
             }),
             { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
           );
