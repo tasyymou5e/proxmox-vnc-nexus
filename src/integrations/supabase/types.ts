@@ -235,7 +235,6 @@ export type Database = {
           learned_timeout_ms: number | null
           name: string
           port: number
-          region_id: string | null
           success_rate: number | null
           tailscale_hostname: string | null
           tailscale_port: number | null
@@ -260,7 +259,6 @@ export type Database = {
           learned_timeout_ms?: number | null
           name: string
           port?: number
-          region_id?: string | null
           success_rate?: number | null
           tailscale_hostname?: string | null
           tailscale_port?: number | null
@@ -285,7 +283,6 @@ export type Database = {
           learned_timeout_ms?: number | null
           name?: string
           port?: number
-          region_id?: string | null
           success_rate?: number | null
           tailscale_hostname?: string | null
           tailscale_port?: number | null
@@ -297,49 +294,7 @@ export type Database = {
         }
         Relationships: [
           {
-            foreignKeyName: "proxmox_servers_region_id_fkey"
-            columns: ["region_id"]
-            isOneToOne: false
-            referencedRelation: "regions"
-            referencedColumns: ["id"]
-          },
-          {
             foreignKeyName: "proxmox_servers_tenant_id_fkey"
-            columns: ["tenant_id"]
-            isOneToOne: false
-            referencedRelation: "tenants"
-            referencedColumns: ["id"]
-          },
-        ]
-      }
-      regions: {
-        Row: {
-          created_at: string | null
-          description: string | null
-          id: string
-          name: string
-          tenant_id: string
-          updated_at: string | null
-        }
-        Insert: {
-          created_at?: string | null
-          description?: string | null
-          id?: string
-          name: string
-          tenant_id: string
-          updated_at?: string | null
-        }
-        Update: {
-          created_at?: string | null
-          description?: string | null
-          id?: string
-          name?: string
-          tenant_id?: string
-          updated_at?: string | null
-        }
-        Relationships: [
-          {
-            foreignKeyName: "regions_tenant_id_fkey"
             columns: ["tenant_id"]
             isOneToOne: false
             referencedRelation: "tenants"
@@ -552,23 +507,14 @@ export type Database = {
         }
         Returns: boolean
       }
-      has_tenant_role:
-        | {
-            Args: {
-              _role: Database["public"]["Enums"]["tenant_role"]
-              _tenant_id: string
-              _user_id: string
-            }
-            Returns: boolean
-          }
-        | {
-            Args: {
-              _roles: Database["public"]["Enums"]["tenant_role"][]
-              _tenant_id: string
-              _user_id: string
-            }
-            Returns: boolean
-          }
+      has_tenant_role: {
+        Args: {
+          _roles: Database["public"]["Enums"]["tenant_role"][]
+          _tenant_id: string
+          _user_id: string
+        }
+        Returns: boolean
+      }
       user_has_tenant_access: {
         Args: { _tenant_id: string; _user_id: string }
         Returns: boolean

@@ -159,6 +159,6 @@ Deno.serve(async (req) => {
     }
   } catch (error) {
     console.error("Admin actions error:", error);
-    return jsonResponse({ error: (error as Error).message || "Internal server error" }, 500);
+    return jsonResponse({ error: error.message || "Internal server error" }, 500);
   }
 });

@@ -124,7 +124,7 @@ interface ImportError {
 
 // Helper to check if user has tenant access with specific roles
 async function checkTenantAccess(
-  supabase: any,
+  supabase: ReturnType<typeof createClient>,
   userId: string,
   tenantId: string,
   requiredRoles: string[]
@@ -543,7 +543,7 @@ Deno.serve(async (req) => {
 
           const testData = await testResponse!.json();
 
-          if (!testResponse!.ok) {
+          if (!testResponse.ok) {
             // Update status if server_id provided
             if (server_id) {
               await supabase
@@ -560,7 +560,7 @@ Deno.serve(async (req) => {
               JSON.stringify({ 
                 success: false, 
                 error: testData.errors || "Failed to connect to Proxmox server",
-                status: testResponse!.status 
+                status: testResponse.status 
               }),
               { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
             );
@@ -596,7 +596,7 @@ Deno.serve(async (req) => {
               .update({ 
                 connection_status: 'offline',
                 last_health_check_at: new Date().toISOString(),
-                health_check_error: (error as Error).message || "Connection failed"
+                health_check_error: error.message || "Connection failed"
               })
               .eq("id", server_id);
           }
@@ -604,7 +604,7 @@ Deno.serve(async (req) => {
           return new Response(
             JSON.stringify({ 
               success: false, 
-              error: (error as Error).message || "Connection failed" 
+              error: error.message || "Connection failed" 
             }),
             { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
           );
@@ -809,7 +809,7 @@ Deno.serve(async (req) => {
   } catch (error) {
     console.error("Proxmox servers error:", error);
     return new Response(
-      JSON.stringify({ error: (error as Error).message || "Internal server error" }),
+      JSON.stringify({ error: error.message || "Internal server error" }),
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   }

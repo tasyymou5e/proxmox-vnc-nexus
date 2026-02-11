@@ -204,14 +204,14 @@ Deno.serve(async (req) => {
 
     } catch (error) {
       result.timing.totalLatencyMs = Math.round(performance.now() - overallStart);
-      result.error = (error as Error).message || "Connection failed";
+      result.error = error.message || "Connection failed";
       
       // Determine error stage
-      if ((error as Error).message?.includes('timeout')) {
+      if (error.message?.includes('timeout')) {
         result.errorStage = 'tcp';
-      } else if ((error as Error).message?.includes('certificate') || (error as Error).message?.includes('SSL')) {
+      } else if (error.message?.includes('certificate') || error.message?.includes('SSL')) {
         result.errorStage = 'tls';
-      } else if ((error as Error).message?.includes('ENOTFOUND') || (error as Error).message?.includes('getaddrinfo')) {
+      } else if (error.message?.includes('ENOTFOUND') || error.message?.includes('getaddrinfo')) {
         result.errorStage = 'dns';
       } else {
         result.errorStage = 'tcp';
@@ -240,7 +240,7 @@ Deno.serve(async (req) => {
   } catch (error) {
     console.error("Connectivity test error:", error);
     return new Response(
-      JSON.stringify({ error: (error as Error).message || "Internal server error" }),
+      JSON.stringify({ error: error.message || "Internal server error" }),
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   }
